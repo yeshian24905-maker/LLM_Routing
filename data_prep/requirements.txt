@@ -1,0 +1,5 @@
+datasets>=4.0,<6.0
+filelock>=3.16,<4.0
+huggingface-hub>=0.30,<3.0
+httpx>=0.28,<0.29
+Pillow>=11.0,<13.0
