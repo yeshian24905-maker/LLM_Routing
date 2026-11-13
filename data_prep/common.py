@@ -19,7 +19,7 @@ FIELDS = (
     "input_tokens", "output_tokens", "cost", "latency", "raw_response", "error",
 )
 PROMPT_VERSION = "mmmu-final-answer-v1"
-SCORING_VERSION = "deterministic-mmmu-v1"
+SCORING_VERSION = "deterministic-mmmu-v2"
 
 
 def utc_now():

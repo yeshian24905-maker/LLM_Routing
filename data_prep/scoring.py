@@ -59,11 +59,12 @@ def parse_prediction(text, question_type, options):
     )
     if explicit:
         candidates = set(letter.upper() for letter in explicit)
-        mentioned = set(re.findall(rf"\b([{letters}])\b", answer))
+        mentioned = {letter.upper() for letter in re.findall(rf"\b([{letters}])\b", answer, re.I)}
         if len(candidates) == 1 and not mentioned - candidates:
             return explicit[-1].upper()
         raise ValueError("Ambiguous multiple-choice answer")
-    matches = [letters[i] for i, option in enumerate(options) if cleaned.casefold() == option.strip().casefold()]
+    answer_forms = {answer.casefold(), cleaned.casefold()}
+    matches = [letters[i] for i, option in enumerate(options) if option.strip().casefold() in answer_forms]
     if len(matches) == 1:
         return matches[0]
     raise ValueError("Cannot extract a unique option letter")

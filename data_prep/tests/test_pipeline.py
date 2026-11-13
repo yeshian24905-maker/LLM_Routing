@@ -184,9 +184,19 @@ class DatasetAndPromptTests(TemporaryWorkspace):
 
 
 class ScoringTests(unittest.TestCase):
+    def test_lowercase_alternatives_are_rejected(self):
+        for response in ("option a or b", "choice b or c", "<answer>option a or b</answer>"):
+            with self.subTest(response=response), self.assertRaises(ValueError):
+                parse_prediction(response, "multiple-choice", ["10", "20", "30"])
+
+    def test_complete_option_text_preserves_punctuation(self):
+        for response in ("Venus.", "<answer>Venus.</answer>"):
+            with self.subTest(response=response):
+                self.assertEqual(parse_prediction(response, "multiple-choice", ["Mercury.", "Venus."]), "B")
+
     def test_common_multiple_choice_formats(self):
         for response in (
-            "<answer>B</answer>", "(B)", "b.", "The answer is B.",
+            "<answer>B</answer>", "(B)", "(b)", "b.", "Option b", "The answer is B.",
             '{"answer": "B"}', '```json\n{"answer": "B"}\n```',
             "Reasoning mentions A.\n<answer>B</answer>", "20",
         ):

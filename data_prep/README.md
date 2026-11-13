@@ -1,22 +1,22 @@
-# MMMU 数据准备
+# MMMU Data Preparation
 
-在项目根目录运行 `python -m data_prep`。脚本下载 MMMU 题目和图片，调用四个模型并评分，输出每个「题目 × 模型」的一条记录。
+Run `python -m data_prep` from the project root. The pipeline downloads MMMU questions and images, queries four models, scores their answers, and exports one observation per question/model pair.
 
-核心代码只保留 5 个文件，每个都有实际逻辑：
+The implementation uses five Python modules:
 
-| 文件 | 职责 |
+| File | Responsibility |
 | --- | --- |
-| `__main__.py` | 命令行入口，直接处理四个命令 |
-| `dataset.py` | 数据下载、校验、图片处理和提示词构建 |
-| `collector.py` | 模型调用、实际费用查询和断点续跑 |
-| `scoring.py` | 答案解析和评分 |
-| `common.py` | 配置、文件读写、日志恢复及结果导出 |
+| `__main__.py` | Command-line entry point for all four commands |
+| `dataset.py` | Downloads, validation, image handling, and multimodal prompts |
+| `collector.py` | Model requests, actual billing lookups, and resumable collection |
+| `scoring.py` | Answer extraction and scoring |
+| `common.py` | Configuration, file I/O, journal recovery, and result exports |
 
-四个模型及请求参数见 `config.json`。不写死价格：运行时读取最新模型目录，费用使用 API 实际账单。
+Model IDs and request settings are in `config.json`. Prices are read from the live model catalog; recorded costs come from actual API billing.
 
-## 使用
+## Usage
 
-需要 Python 3.10+。先用少量题目检查：
+Python 3.10 or later is required. Start with a small sample:
 
 ```powershell
 python -m pip install -r data_prep/requirements.txt
@@ -24,14 +24,14 @@ python -m data_prep check-models
 python -m data_prep download --splits dev --subjects Accounting Physics --limit-per-subject 1 --output-dir data_prep/output/smoke
 python -m data_prep run --data-dir data_prep/output/smoke --dry-run
 
-# 真实采集：2 道题 × 4 个模型，共 8 次 completion 请求
-$env:OPENROUTER_API_KEY = "替换为自己的 Key"
+# Real collection: 2 questions x 4 models = 8 completion requests
+$env:OPENROUTER_API_KEY = "your-api-key"
 python -m data_prep run --data-dir data_prep/output/smoke --delay 1
 ```
 
-`--dry-run` 不联网、不调用模型，也不生成虚构结果。Key 从环境变量读取，不写入产物，不自动加载 `.env`。
+`--dry-run` runs offline, makes no model requests, and creates no fabricated results. The API key is read from the environment and is never written to artifacts. The scripts do not load `.env` automatically.
 
-准备全部 30 个学科的 validation 数据：
+Prepare the validation split for all 30 subjects:
 
 ```powershell
 python -m data_prep download
@@ -39,61 +39,63 @@ python -m data_prep run --dry-run
 python -m data_prep run --delay 1
 ```
 
-默认数据目录为 `data_prep/output/mmmu_validation`，结果保存在该目录的 `runs/default/`。
+The default data directory is `data_prep/output/mmmu_validation`. Results are saved under its `runs/default/` subdirectory.
 
-常用选项见 `python -m data_prep <命令> --help`：
+Use `python -m data_prep <command> --help` for all options. Common examples:
 
-- `download --splits dev validation test --output-dir ...` 合并多个 split。
-- `download --subjects Accounting Physics Art_Theory` 选择学科，名称区分大小写。
-- `download --limit-per-subject N` 按原始顺序取每个「学科 × split」的前 N 题。
-- `download --revision ...` 指定版本；实际下载固定在解析出的 commit SHA。
-- `run --models anthropic/claude-haiku-5.5 --limit N` 只采集指定模型和前 N 题。
-- `run --output-dir ...` 为另一组实验选择独立的输出目录。
+- `download --splits dev validation test --output-dir ...` combines splits.
+- `download --subjects Accounting Physics Art_Theory` selects subjects; names are case-sensitive.
+- `download --limit-per-subject N` takes the first N questions per subject/split in source order.
+- `download --revision ...` selects a version, which is resolved to a fixed commit SHA.
+- `run --models anthropic/claude-haiku-5.5 --limit N` selects a model and the first N prepared questions.
+- `run --output-dir ...` keeps a separate experiment in its own directory.
 
-## 输出
+## Output
 
-`results.csv` 和 `results.jsonl` 包含相同的 12 列：
+`results.csv` and `results.jsonl` contain the same 12 fields:
 
-| 字段 | 含义 |
+| Field | Meaning |
 | --- | --- |
-| `question_id` | 原始 MMMU ID |
-| `subject` | 学科 |
-| `model` | 请求使用的完整模型 ID |
-| `prediction` | 解析出的选项字母或开放题最终答案 |
-| `correct_answer` | Ground truth |
-| `correct` | 整数 0 / 1；API 或答案解析失败为 0 |
-| `input_tokens` | API 报告的输入用量，包含图片 |
-| `output_tokens` | API 报告的输出用量，不另行重复累加 reasoning tokens |
-| `cost` | 该次 completion 实际报告费用，单位 USD |
-| `latency` | 非流式 completion HTTP 请求耗时，单位秒 |
-| `raw_response` | 未修改的模型回复文本 |
-| `error` | API、解析或账单缺失错误；正常为 null |
+| `question_id` | Original MMMU identifier |
+| `subject` | Subject name |
+| `model` | Full model ID used in the request |
+| `prediction` | Parsed option letter or final open-ended answer |
+| `correct_answer` | Ground-truth answer |
+| `correct` | Integer 0 or 1; API or answer-parsing failures receive 0 |
+| `input_tokens` | Reported input usage, including images |
+| `output_tokens` | Reported output usage; reasoning tokens are not added again |
+| `cost` | Actual reported completion cost in USD |
+| `latency` | Non-streaming completion HTTP request duration in seconds |
+| `raw_response` | Unmodified model response text |
+| `error` | API, parsing, or missing-accounting error; null on success |
 
-费用优先使用 `usage.cost`，缺失时查询 `/generation` 的 `total_cost`。token 数优先使用 `usage.prompt_tokens/completion_tokens`，缺失时查询 `native_tokens_prompt/native_tokens_completion`。仍未知的值保留 `null` 并记录错误；实际零费用保留为 `0`。CSV 的 null 为空单元格，列表答案用 JSON 保存。
+Cost is taken from `usage.cost`, with `/generation`'s `total_cost` as a fallback. Token counts use `usage.prompt_tokens/completion_tokens`, falling back to `native_tokens_prompt/native_tokens_completion`. Missing values remain `null` and are recorded as errors. Actual zero cost remains `0`. CSV represents null as an empty cell and answer lists as JSON strings.
 
-耗时不包含图片编码、请求间等待和后续账单查询。账单信息缺失不改变已完成的答案评分，因此 `correct=1` 时也可能有 `accounting_error`。
+Latency excludes image encoding, delays between requests, and subsequent billing lookups. Missing accounting data does not change a completed answer's grade, so `correct=1` can coexist with an `accounting_error`.
 
-选择题只接受可唯一解析的答案，不随机猜测。开放题只评最终答案，忽略大小写并按词边界匹配文本；数字按 MMMU 约定保留两位小数，支持单位、千位分隔符、科学计数法和答案列表。此解析方式与官方自由文本回退行为有所区别。
+Multiple-choice answers must identify a unique option; the parser never guesses. Open-ended scoring uses only the final answer, with case-insensitive text matching at word boundaries and numeric values rounded to two decimal places. It supports units, thousands separators, scientific notation, and answer lists. These deterministic parsing rules differ from the official evaluator's free-text fallback behavior.
 
-题目、选项、图片路径及校验值保存在 `questions.jsonl`；图片按 `<image n>` 标记插入请求，同一张图只附加一次，其他非空图片也会附加。不会发送答案或 explanation。原始 API JSON、账单查询和字段来源保存在 `attempts.jsonl`，模型目录快照保存在 `catalogs/`。
+`questions.jsonl` stores question text, options, labels, image paths, and checksums. Images are inserted at their `<image n>` markers and attached once each; other nonempty images are also included. Ground-truth answers and explanations are excluded from model prompts. Full API responses, billing lookups, and field sources are stored in `attempts.jsonl`; model catalog snapshots are stored under `catalogs/`.
 
-## 续跑、重试与导出
+## Resume, Retry, and Export
 
-运行同一条 `run` 命令会跳过已记录的组合，包括错误行。每次调用后同步写入日志，CSV/JSONL 按 `(question_id, model)` 保留最新结果。文件锁防止同一目录并发采集；数据和配置指纹防止不同实验混合。已完成的数据目录不会被覆盖。
+Running the same `run` command skips recorded pairs, including error rows. Each completed request is flushed to the journal. CSV/JSONL retain the latest result for each `(question_id, model)` pair. A file lock prevents concurrent collection into the same directory, and data/configuration fingerprints prevent mixing experiments. Completed datasets are never overwritten.
+
+Changes to scoring rules, prompts, model settings, or prepared questions require a new `--output-dir`. The current scoring version is `deterministic-mmmu-v2`; existing journals retain their original grades.
 
 ```powershell
-# 显式重新调用错误行，会产生新的请求和可能的费用
+# Re-query error rows explicitly; these requests may incur new charges
 python -m data_prep run --data-dir data_prep/output/smoke --retry-errors --delay 1
 
-# 从已有日志重新生成结果，不调用模型
+# Rebuild exports from the journal without querying models
 python -m data_prep export --run-dir data_prep/output/smoke/runs/default
 
-# 离线测试，包含模拟的下载 → 四模型采集 → 导出流程
+# Offline tests, including a simulated download -> four-model collection -> export workflow
 python -m unittest discover -s data_prep/tests -v
 ```
 
-旧尝试仍保留在日志中。`summary.json` 同时报告最新结果费用、所有尝试累计已知费用，以及未知费用条数。缺账单信息的错误行也会被 `--retry-errors` 重新调用。
+Older attempts remain in the journal. `summary.json` reports the latest observations' costs, cumulative known costs across all attempts, and the number of attempts with unknown costs. `--retry-errors` also re-queries rows whose only error is missing accounting data.
 
-HTTP 401/402/403 保存当前错误后停止；其他单次错误记录后继续。当次采集有错误时退出码为 1。若服务器已完成请求、本地尚未写入日志时退出，续跑无法判断该次是否已计费。训练时应筛选错误行，避免将接口故障当成模型能力不足。
+HTTP 401/402/403 responses stop collection after saving the current error. Other individual errors are recorded and collection continues. A collection invocation with errors returns exit code 1. If the process exits after the server completes a request but before the local journal is written, resuming cannot determine whether that request was billed. Filter error rows before training so API failures are not treated as model capability failures.
 
-参考：[MMMU 数据集](https://huggingface.co/datasets/MMMU/MMMU)、[官方评分实现](https://github.com/MMMU-Benchmark/MMMU/blob/main/mmmu/utils/eval_utils.py)、[OpenRouter 用量与费用](https://openrouter.ai/docs/cookbook/administration/usage-accounting)。
+References: [MMMU dataset](https://huggingface.co/datasets/MMMU/MMMU), [official evaluator](https://github.com/MMMU-Benchmark/MMMU/blob/main/mmmu/utils/eval_utils.py), and [OpenRouter usage and billing](https://openrouter.ai/docs/cookbook/administration/usage-accounting).
