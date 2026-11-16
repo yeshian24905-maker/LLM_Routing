@@ -1,101 +1,101 @@
 # MMMU Data Preparation
 
-Run `python -m data_prep` from the project root. The pipeline downloads MMMU questions and images, queries four models, scores their answers, and exports one observation per question/model pair.
-
-The implementation uses five Python modules:
+This package builds the routing dataset: **1000 MMMU questions × 4 models = 4000 raw observations**. Each model is asked each question **once**. The pipeline records the raw response next to the ground-truth answer. It does **not** parse, score, or re-ask; reviewing and grading happen afterwards, outside this package.
 
 | File | Responsibility |
 | --- | --- |
-| `__main__.py` | Command-line entry point for all four commands |
-| `dataset.py` | Downloads, validation, image handling, and multimodal prompts |
-| `collector.py` | Model requests, actual billing lookups, and resumable collection |
-| `scoring.py` | Answer extraction and scoring |
-| `common.py` | Configuration, file I/O, journal recovery, and result exports |
+| `__main__.py` | Command-line entry point (`download`, `check-models`, `pilot`, `run`, `export`) |
+| `dataset.py` | Seeded, subject-balanced sampling, image handling, multimodal prompts |
+| `collector.py` | Parallel requests, retries for failed requests, billing lookups, resumable journal |
+| `pilot.py` | Small paid trial on one model and a Markdown report for manual review |
+| `common.py` | Configuration, file I/O, journal recovery, exports and summaries |
 
-Model IDs and request settings are in `config.json`. Prices are read from the live model catalog; recorded costs come from actual API billing.
+## Setup
 
-## Usage
+Python 3.10+ is required (developed with 3.15 via [uv](https://docs.astral.sh/uv/)). From the project root:
 
-Python 3.10 or later is required. Start with a small sample:
-
-```powershell
-python -m pip install -r data_prep/requirements.txt
-python -m data_prep check-models
-python -m data_prep download --splits dev --subjects Accounting Physics --limit-per-subject 1 --output-dir data_prep/output/smoke
-python -m data_prep run --data-dir data_prep/output/smoke --dry-run
-
-# Real collection: 2 questions x 4 models = 8 completion requests
-$env:OPENROUTER_API_KEY = "your-api-key"
-python -m data_prep run --data-dir data_prep/output/smoke --delay 1
+```bash
+uv venv --python 3.15 .venv
+uv pip install --python .venv -r data_prep/requirements.txt
+source .venv/bin/activate
+python -m unittest discover -s data_prep/tests      # offline, no network, no cost
 ```
 
-`--dry-run` runs offline, makes no model requests, and creates no fabricated results. The API key is read from the environment and is never written to artifacts. The scripts do not load `.env` automatically.
+The API key is read from the environment and never written to disk:
 
-Prepare the validation split for all 30 subjects:
+```bash
+export OPENROUTER_API_KEY="..."
+```
 
-```powershell
-python -m data_prep download
+**Set a spending limit on this OpenRouter key in the OpenRouter dashboard before any paid step.** The code has no budget feature on purpose: when the key's limit is reached, OpenRouter answers HTTP 402 and the collector stops all workers.
+
+On macOS, wrap long steps (download, full run) in `caffeinate -dims ...` so the machine does not sleep.
+
+## Workflow
+
+```bash
+# 1. Download the sample (whole test split is ~3.3 GB because images are embedded; see "Dataset")
+caffeinate -dims python -m data_prep download
+
+# 2. Offline check of every prompt and image (no API calls)
 python -m data_prep run --dry-run
-python -m data_prep run --delay 1
+
+# 3. Check model IDs, image support, request parameters, and live prices
+python -m data_prep check-models
+
+# 4. Pilot: cheapest model (by live price) on the first 10, then 100 questions
+python -m data_prep pilot --n 10
+python -m data_prep pilot --n 100
+#    -> read data_prep/output/mmmu_test_sample/runs/pilot_<model>_<n>/pilot_report.md
+
+# 5. Full collection: 1000 questions x 4 models
+caffeinate -dims python -m data_prep run
 ```
 
-The default data directory is `data_prep/output/mmmu_validation`. Results are saved under its `runs/default/` subdirectory.
+Defaults: data in `data_prep/output/mmmu_test_sample/`, full run in its `runs/default/`. Use `python -m data_prep <command> --help` for all options, for example `run --models <id> --limit N`, `run --workers-per-model N`, `download --seed N --sample-size N|all --splits dev validation test`.
 
-Use `python -m data_prep <command> --help` for all options. Common examples:
+## Dataset
 
-- `download --splits dev validation test --output-dir ...` combines splits.
-- `download --subjects Accounting Physics Art_Theory` selects subjects; names are case-sensitive.
-- `download --limit-per-subject N` takes the first N questions per subject/split in source order.
-- `download --revision ...` selects a version, which is resolved to a fixed commit SHA.
-- `run --models anthropic/claude-haiku-5.5 --limit N` selects a model and the first N prepared questions.
-- `run --output-dir ...` keeps a separate experiment in its own directory.
+- **Source:** MMMU `test` split (10,500 questions, all with released answers), pinned to the resolved Hugging Face commit recorded in `dataset_manifest.json`.
+- **Sampling:** 1000 questions split as evenly as possible over the 30 subjects (33 or 34 each). The seed (default `20261116`) decides both the questions and which subjects get the extra one, so the same command always gives the same sample. Unusable rows are skipped, listed in `skipped_rows`, and replaced by the next question in that subject's seeded order.
+- **Order:** `questions.jsonl` is globally shuffled, so the first N questions (`--limit N`, `pilot --n N`) are a mixed-subject subset of the 1000 and the pilot's questions are part of the final sample.
+- **Download size:** each subject's split is a single parquet row group, so rows cannot be fetched individually; the download reads whole files (~3.3 GB for `test`). Files are cached under the data directory and resumable.
+- **Images:** original JPEG/PNG bytes are kept whenever possible. Images with real transparency are composited onto **white** (a plain RGB conversion turns transparent areas black). EXIF-rotated, CMYK and other formats are re-encoded; images over 7680 px per side or 3.75 MB are scaled down to stay within provider limits. Every change is recorded per image in `image_processing` and counted in `image_stats`.
+- **Answers:** about 0.3% of `correct_answer` values are Python-list strings of accepted alternatives, e.g. `"['$Al_2S_3$', 'Al2S3']"`. They are stored unchanged; graders must treat them as "any of these".
+- Ground-truth answers and explanations are never put into prompts.
+
+## Collection rules
+
+- **One question, one answer.** Whatever the model returns is recorded as is: empty answers, refusals, truncated output (`finish_reason=length`), answers without an `<answer>` tag. None of these are errors and none are re-asked.
+- **Only requests with no model response are retried automatically**: network errors, timeouts, HTTP 408/429/5xx, and HTTP 200 bodies that only carry such an error. Up to `max_attempts` (5) tries with exponential backoff that honors `Retry-After`. Every try is logged in `transport_attempts`. A timed-out request may still have been processed and billed upstream; this cannot be detected.
+- **HTTP 401/402/403** stops all workers; requests already in flight are still recorded.
+- **Missing billing data** (`accounting_error`): only the billing endpoint is queried again (on the next `run`), never the model.
+- `run --retry-errors` re-sends only pairs that ended with an `api_error` (no model response). Re-asking pairs that did get a response is a separate, later step after manual review.
+- **Model settings** (`config.json`): all models share `reasoning.effort = "low"`, `max_tokens = 16384`, and a 600 s timeout. `concurrency_per_model` (8) requests run in parallel per model, 32 in total.
 
 ## Output
 
-`results.csv` and `results.jsonl` contain the same 12 fields:
+`results.csv` / `results.jsonl` hold the latest observation per `(question_id, model)` with 13 fields:
 
 | Field | Meaning |
 | --- | --- |
-| `question_id` | Original MMMU identifier |
-| `subject` | Subject name |
+| `question_id`, `subject`, `question_type` | From MMMU |
 | `model` | Full model ID used in the request |
-| `prediction` | Parsed option letter or final open-ended answer |
-| `correct_answer` | Ground-truth answer |
-| `correct` | Integer 0 or 1; API or answer-parsing failures receive 0 |
-| `input_tokens` | Reported input usage, including images |
-| `output_tokens` | Reported output usage; reasoning tokens are not added again |
-| `cost` | Actual reported completion cost in USD |
-| `latency` | Non-streaming completion HTTP request duration in seconds |
-| `raw_response` | Unmodified model response text |
-| `error` | API, parsing, or missing-accounting error; null on success |
+| `raw_response` | Model text exactly as returned (refusal text if the model refused; null if no response) |
+| `correct_answer` | Ground-truth answer, unchanged |
+| `finish_reason` | As reported, e.g. `stop`, `length` |
+| `input_tokens`, `output_tokens` | Reported usage; output includes reasoning tokens |
+| `reasoning_tokens` | Reported reasoning tokens (subset of output), null if not reported |
+| `cost` | Actual billed USD (`usage.cost`, else `/generation` `total_cost`); 0 is a real value |
+| `latency` | Seconds for the final HTTP attempt |
+| `error` | `api_error: ...` (no usable response) or `accounting_error: ...`; null otherwise |
 
-Cost is taken from `usage.cost`, with `/generation`'s `total_cost` as a fallback. Token counts use `usage.prompt_tokens/completion_tokens`, falling back to `native_tokens_prompt/native_tokens_completion`. Missing values remain `null` and are recorded as errors. Actual zero cost remains `0`. CSV represents null as an empty cell and answer lists as JSON strings.
+Other files in the run directory:
 
-Latency excludes image encoding, delays between requests, and subsequent billing lookups. Missing accounting data does not change a completed answer's grade, so `correct=1` can coexist with an `accounting_error`.
+- `attempts.jsonl`: append-only journal holding the full API payloads (including reasoning text), request settings, retries, and billing queries.
+- `summary.json`: per-model counts, `finish_reason` distribution, empty responses, tokens, cost, and latency percentiles. `all_requests` totals billing over every request, including re-sent ones.
+- `run_manifest.json` and `catalogs/`: run settings and price snapshots.
 
-Multiple-choice answers must identify a unique option; the parser never guesses. Open-ended scoring uses only the final answer, with case-insensitive text matching at word boundaries and numeric values rounded to two decimal places. It supports units, thousands separators, scientific notation, and answer lists. These deterministic parsing rules differ from the official evaluator's free-text fallback behavior.
+Re-running the same command resumes and skips recorded pairs. A file lock prevents two runs in one directory, and changing data, prompts, or `config.json` request settings requires a new `--output-dir`. `python -m data_prep export --run-dir DIR` rebuilds the exports from the journal without network access.
 
-`questions.jsonl` stores question text, options, labels, image paths, and checksums. Images are inserted at their `<image n>` markers and attached once each; other nonempty images are also included. Ground-truth answers and explanations are excluded from model prompts. Full API responses, billing lookups, and field sources are stored in `attempts.jsonl`; model catalog snapshots are stored under `catalogs/`.
-
-## Resume, Retry, and Export
-
-Running the same `run` command skips recorded pairs, including error rows. Each completed request is flushed to the journal. CSV/JSONL retain the latest result for each `(question_id, model)` pair. A file lock prevents concurrent collection into the same directory, and data/configuration fingerprints prevent mixing experiments. Completed datasets are never overwritten.
-
-Changes to scoring rules, prompts, model settings, or prepared questions require a new `--output-dir`. The current scoring version is `deterministic-mmmu-v2`; existing journals retain their original grades.
-
-```powershell
-# Re-query error rows explicitly; these requests may incur new charges
-python -m data_prep run --data-dir data_prep/output/smoke --retry-errors --delay 1
-
-# Rebuild exports from the journal without querying models
-python -m data_prep export --run-dir data_prep/output/smoke/runs/default
-
-# Offline tests, including a simulated download -> four-model collection -> export workflow
-python -m unittest discover -s data_prep/tests -v
-```
-
-Older attempts remain in the journal. `summary.json` reports the latest observations' costs, cumulative known costs across all attempts, and the number of attempts with unknown costs. `--retry-errors` also re-queries rows whose only error is missing accounting data.
-
-HTTP 401/402/403 responses stop collection after saving the current error. Other individual errors are recorded and collection continues. A collection invocation with errors returns exit code 1. If the process exits after the server completes a request but before the local journal is written, resuming cannot determine whether that request was billed. Filter error rows before training so API failures are not treated as model capability failures.
-
-References: [MMMU dataset](https://huggingface.co/datasets/MMMU/MMMU), [official evaluator](https://github.com/MMMU-Benchmark/MMMU/blob/main/mmmu/utils/eval_utils.py), and [OpenRouter usage and billing](https://openrouter.ai/docs/cookbook/administration/usage-accounting).
+References: [MMMU dataset](https://huggingface.co/datasets/MMMU/MMMU), [OpenRouter usage accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting).

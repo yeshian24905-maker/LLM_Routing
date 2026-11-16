@@ -5,7 +5,7 @@ import hashlib
 import json
 import math
 import os
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -13,13 +13,14 @@ from urllib.parse import urlsplit
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG = PACKAGE_DIR / "config.json"
-DEFAULT_DATA_DIR = PACKAGE_DIR / "output" / "mmmu_validation"
+DEFAULT_DATA_DIR = PACKAGE_DIR / "output" / "mmmu_test_sample"
 FIELDS = (
-    "question_id", "subject", "model", "prediction", "correct_answer", "correct",
-    "input_tokens", "output_tokens", "cost", "latency", "raw_response", "error",
+    "question_id", "subject", "question_type", "model", "raw_response", "correct_answer",
+    "finish_reason", "input_tokens", "output_tokens", "reasoning_tokens", "cost", "latency", "error",
 )
 PROMPT_VERSION = "mmmu-final-answer-v1"
-SCORING_VERSION = "deterministic-mmmu-v2"
+# Request keys the collector always sets itself; config must not override them.
+RESERVED_REQUEST_KEYS = {"model", "models", "messages", "prompt", "stream", "max_tokens"}
 
 
 def utc_now():
@@ -89,19 +90,21 @@ def load_config(path=DEFAULT_CONFIG):
         raise ValueError("base_url must use HTTPS (HTTP is allowed for local testing)")
     if endpoint.username or endpoint.password or endpoint.query or endpoint.fragment:
         raise ValueError("base_url must not contain credentials, a query, or a fragment")
-    for name in ("timeout_seconds", "max_output_tokens"):
+    for name in ("timeout_seconds", "max_output_tokens", "max_attempts", "concurrency_per_model"):
         value = config.get(name)
         if type(value) is not int or value <= 0:
             raise ValueError(f"Config {name} must be a positive integer")
+    shared = config.setdefault("request_parameters", {})
+    if not isinstance(shared, dict) or RESERVED_REQUEST_KEYS.intersection(shared):
+        raise ValueError("Invalid request_parameters in config")
     if not isinstance(config.get("models"), list) or not config["models"]:
         raise ValueError("Config requires at least one model")
     identifiers = []
-    reserved = {"model", "models", "messages", "prompt", "stream", "max_tokens"}
     for model in config["models"]:
         if not isinstance(model, dict) or not isinstance(model.get("id"), str) or not model["id"]:
             raise ValueError("Each model requires an id")
         parameters = model.get("parameters", {})
-        if not isinstance(parameters, dict) or reserved.intersection(parameters):
+        if not isinstance(parameters, dict) or RESERVED_REQUEST_KEYS.intersection(parameters):
             raise ValueError(f"Invalid additional parameters for {model['id']}")
         identifiers.append(model["id"])
     if len(set(identifiers)) != len(identifiers):
@@ -119,6 +122,11 @@ def select_models(config, identifiers=None):
     return models
 
 
+def request_parameters(config, model):
+    """Shared request settings, overridden by the model's own parameters."""
+    return {**config.get("request_parameters", {}), **model.get("parameters", {})}
+
+
 def nonnegative_number(value, integer=False):
     if value is None or isinstance(value, bool):
         return None
@@ -131,6 +139,14 @@ def nonnegative_number(value, integer=False):
     if integer:
         return int(number) if number.is_integer() else None
     return number
+
+
+def percentile(values, fraction):
+    """Nearest-rank percentile; None for an empty list."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(fraction * len(ordered)) - 1)]
 
 
 def append_attempt(path, attempt):
@@ -171,19 +187,73 @@ def recover_journal(path):
                 return
 
 
-def latest_results(journal_path):
+def latest_records(journal_path):
+    """Latest journal record per (question_id, model) pair."""
     latest = {}
     if Path(journal_path).exists():
-        for attempt in read_jsonl(journal_path):
-            row = attempt["result"]
+        for record in read_jsonl(journal_path):
+            row = record["result"]
             if set(row) != set(FIELDS):
                 raise ValueError("Unexpected result schema in attempts.jsonl")
-            latest[(row["question_id"], row["model"])] = row
+            latest[(row["question_id"], row["model"])] = record
     return latest
 
 
+def latest_results(journal_path):
+    return {key: record["result"] for key, record in latest_records(journal_path).items()}
+
+
+def is_api_error(row):
+    return row["error"] is not None and row["error"].startswith("api_error")
+
+
+def request_costs(journal_path):
+    """Billing per completion request, counting accounting refreshes only once."""
+    costs, failed = {}, 0
+    for number, record in enumerate(read_jsonl(journal_path)):
+        if record.get("kind") == "accounting_refresh":
+            costs[record["generation_id"]] = record["result"]["cost"]
+            continue
+        response = record.get("response")
+        generation_id = response.get("id") if isinstance(response, dict) else None
+        if is_api_error(record["result"]) and record["result"]["cost"] is None:
+            failed += 1
+            continue
+        costs[generation_id if isinstance(generation_id, str) else f"line-{number}"] = record["result"]["cost"]
+    known = [cost for cost in costs.values() if cost is not None]
+    return {
+        "completion_requests": len(costs), "known_cost_usd": math.fsum(known),
+        "requests_with_unknown_cost": len(costs) - len(known), "failed_requests": failed,
+    }
+
+
+def summarize_rows(rows):
+    def mean(values):
+        return sum(values) / len(values) if values else None
+
+    def present(name):
+        return [row[name] for row in rows if row[name] is not None]
+
+    latencies = present("latency")
+    costs = present("cost")
+    return {
+        "rows": len(rows),
+        "errors": sum(row["error"] is not None for row in rows),
+        "api_errors": sum(is_api_error(row) for row in rows),
+        "finish_reasons": dict(Counter(str(row["finish_reason"]) for row in rows)),
+        "empty_responses": sum(not (row["raw_response"] or "").strip() for row in rows),
+        "mean_input_tokens": mean(present("input_tokens")),
+        "mean_output_tokens": mean(present("output_tokens")),
+        "mean_reasoning_tokens": mean(present("reasoning_tokens")),
+        "known_cost_usd": math.fsum(costs), "rows_with_unknown_cost": len(rows) - len(costs),
+        "mean_latency_seconds": mean(latencies),
+        "p50_latency_seconds": percentile(latencies, 0.5),
+        "p95_latency_seconds": percentile(latencies, 0.95),
+    }
+
+
 def export_results(run_dir):
-    """Export the latest result per pair, keeping all attempts in the cost totals."""
+    """Export the latest observation per pair; billing totals cover every request."""
     run_dir = Path(run_dir)
     journal = run_dir / "attempts.jsonl"
     if not journal.exists():
@@ -204,32 +274,10 @@ def export_results(run_dir):
     groups = defaultdict(list)
     for row in rows:
         groups[row["model"]].append(row)
-    summaries = {}
-    for model, observations in sorted(groups.items()):
-        predicted = [row for row in observations if row["prediction"] is not None]
-        costs = [row["cost"] for row in observations if row["cost"] is not None]
-        latencies = [row["latency"] for row in observations if row["latency"] is not None]
-        summaries[model] = {
-            "rows": len(observations),
-            "errors": sum(row["error"] is not None for row in observations),
-            "accuracy_all_rows": sum(row["correct"] for row in observations) / len(observations),
-            "accuracy_parsed_answers": sum(row["correct"] for row in predicted) / len(predicted) if predicted else None,
-            "known_cost_usd_latest_attempts": math.fsum(costs), "rows_with_unknown_cost": len(observations) - len(costs),
-            "mean_latency_seconds": sum(latencies) / len(latencies) if latencies else None,
-        }
-    all_costs = []
-    attempt_count = unknown_cost_count = 0
-    for attempt in read_jsonl(journal):
-        attempt_count += 1
-        cost = attempt["result"]["cost"]
-        if cost is None:
-            unknown_cost_count += 1
-        else:
-            all_costs.append(cost)
     summary = {
-        "exported_at": utc_now(), "rows": len(rows), "models": summaries,
-        "attempts": attempt_count, "known_cost_usd_all_attempts": math.fsum(all_costs),
-        "attempts_with_unknown_cost": unknown_cost_count,
+        "exported_at": utc_now(), "rows": len(rows),
+        "models": {model: summarize_rows(observations) for model, observations in sorted(groups.items())},
+        "all_requests": request_costs(journal),
     }
     write_json(run_dir / "summary.json", summary)
     print(f"Exported {len(rows)} rows to {run_dir / 'results.csv'} and results.jsonl")
