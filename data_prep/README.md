@@ -7,7 +7,7 @@ This package builds the routing dataset: **1000 MMMU questions × 4 models = 400
 | `__main__.py` | Command-line entry point (`download`, `check-models`, `pilot`, `run`, `export`) |
 | `dataset.py` | Seeded, subject-balanced sampling, image handling, multimodal prompts |
 | `collector.py` | Parallel requests, retries for failed requests, billing lookups, resumable journal |
-| `pilot.py` | Small paid trial on one model and a Markdown report for manual review |
+| `pilot.py` | Small paid trial on one model and a report with questions, options, images, and raw responses |
 | `common.py` | Configuration, file I/O, journal recovery, exports and summaries |
 
 ## Setup
@@ -95,6 +95,8 @@ Other files in the run directory:
 - `attempts.jsonl`: append-only journal holding the full API payloads (including reasoning text), request settings, retries, and billing queries.
 - `summary.json`: per-model counts, `finish_reason` distribution, empty responses, tokens, cost, and latency percentiles. `all_requests` totals billing over every request, including re-sent ones.
 - `run_manifest.json` and `catalogs/`: run settings and price snapshots.
+
+The pilot's `pilot_report.md` includes the source question, labeled options, local images, ground-truth answer, and unmodified model response for each recorded pair. Open it in VS Code and press `Ctrl+Shift+V` to preview the images. Questions are joined from `questions.jsonl`; rebuilding the report uses existing records without model requests.
 
 Re-running the same command resumes and skips recorded pairs. A file lock prevents two runs in one directory, and changing data, prompts, or `config.json` request settings requires a new `--output-dir`. `python -m data_prep export --run-dir DIR` rebuilds the exports from the journal without network access.
 

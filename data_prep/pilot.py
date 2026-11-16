@@ -1,10 +1,12 @@
 """Small paid trial on one model, followed by a human-readable report for manual review."""
 
+import os
 import re
 from pathlib import Path
+from urllib.parse import quote
 
 from .collector import api_client, catalog_price, collect_dataset, fetch_catalog
-from .common import latest_results, load_config, read_json, summarize_rows, utc_now
+from .common import latest_results, load_config, read_json, read_jsonl, summarize_rows, utc_now
 from .dataset import load_questions
 
 
@@ -31,10 +33,15 @@ def number(value, digits=1):
     return "n/a" if value is None else f"{value:,.{digits}f}"
 
 
-def write_report(run_dir, model_id, catalog, total_questions):
+def write_report(run_dir, model_id, catalog, total_questions, data_dir):
     run_dir = Path(run_dir)
+    data_dir = Path(data_dir).resolve()
     rows = [row for row in latest_results(run_dir / "attempts.jsonl").values() if row["model"] == model_id]
     rows.sort(key=lambda row: row["question_id"])
+    questions = {question["question_id"]: question for question in read_jsonl(data_dir / "questions.jsonl")}
+    missing = {row["question_id"] for row in rows} - questions.keys()
+    if missing:
+        raise ValueError(f"Report questions missing from {data_dir}: {sorted(missing)}")
     stats = summarize_rows(rows)
     tagged = sum(bool(re.search(r"<answer>.*?</answer>", row["raw_response"] or "", re.S)) for row in rows)
     priced_rows = [row for row in rows if row["cost"] is not None]
@@ -84,8 +91,23 @@ def write_report(run_dir, model_id, catalog, total_questions):
             lines.append(f"| {label} | ${per_request:.6f} | ${per_request * total_questions:.2f} |")
     lines += ["", "## Responses", ""]
     for row in rows:
+        question = questions[row["question_id"]]
         lines += [
             f"### {row['question_id']} ({row['subject']}, {row['question_type']})", "",
+            "#### Question", "", fenced(question["question"]), "",
+        ]
+        if question["options"]:
+            options = "\n".join(f"{chr(65 + index)}. {option}" for index, option in enumerate(question["options"]))
+            lines += ["#### Options", "", fenced(options), ""]
+        for index, filename in sorted(question["images"].items(), key=lambda item: int(item[0])):
+            image_path = data_dir / filename
+            try:
+                image_url = quote(Path(os.path.relpath(image_path, run_dir.resolve())).as_posix(), safe="/:")
+            except ValueError:  # Windows paths on different drives cannot be relative.
+                image_url = image_path.as_uri()
+            lines += [f"**Image {index}**", "", f"![Image {index}](<{image_url}>)", ""]
+        lines += [
+            "#### Recorded response", "",
             f"- Correct answer: `{row['correct_answer']}`",
             f"- finish_reason: `{row['finish_reason']}`; tokens in/out/reasoning: "
             f"{row['input_tokens']}/{row['output_tokens']}/{row['reasoning_tokens']}; "
@@ -117,7 +139,7 @@ def run_pilot(data_dir, config_path, questions=10, model_id=None, output_dir=Non
     )
     manifest = data_dir / "dataset_manifest.json"
     total = read_json(manifest)["question_count"] if manifest.exists() else len(load_questions(data_dir))
-    path, stats = write_report(output_dir, model_id, catalog, total)
+    path, stats = write_report(output_dir, model_id, catalog, total, data_dir)
     print(f"Pilot report written to {path}")
     print(
         f"  {stats['rows']} responses, {stats['api_errors']} API errors, finish_reason {stats['finish_reasons']}, "

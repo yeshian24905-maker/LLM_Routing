@@ -31,7 +31,7 @@ from data_prep.dataset import (
     allocate, build_messages, download_dataset, local_image_bytes, normalize_row, prepare_image,
     validate_question,
 )
-from data_prep.pilot import cheapest_model, run_pilot
+from data_prep.pilot import cheapest_model, run_pilot, write_report
 
 
 IMAGE_COLUMNS = [f"image_{index}" for index in range(1, 8)]
@@ -598,6 +598,40 @@ class RunTests(TemporaryWorkspace):
 
 
 class PilotTests(TemporaryWorkspace):
+    def test_report_can_be_rebuilt_offline_with_questions_options_and_images(self):
+        questions = self.prepare(count=2)
+        posts = []
+
+        def handler(request):
+            if request.method == "GET":
+                return httpx.Response(200, json=catalog_entries(self.identifiers))
+            posts.append(request)
+            return httpx.Response(200, json=completion())
+
+        run_dir = self.root / "review reports"
+        with self.run_api(handler), redirect_stdout(StringIO()):
+            collect_dataset(self.data_dir, run_dir, self.config_path, model_ids=self.identifiers[:1])
+        preserved = {name: (run_dir / name).read_bytes() for name in (
+            "attempts.jsonl", "results.jsonl", "results.csv", "summary.json", "run_manifest.json",
+        )}
+        catalog = {"models": {entry["id"]: entry for entry in catalog_entries(self.identifiers)["data"]}}
+        with patch("httpx.Client.request", side_effect=AssertionError("Report generation must remain offline")):
+            report, stats = write_report(run_dir, self.identifiers[0], catalog, 2, self.data_dir)
+        text = report.read_text(encoding="utf-8")
+        self.assertEqual(stats["rows"], 2)
+        self.assertEqual(text.count("#### Question\n"), 2)
+        self.assertEqual(text.count("#### Recorded response\n"), 2)
+        self.assertEqual(text.count("![Image 1]"), 2)
+        self.assertIn("A. 10\nB. 20\nC. 30", text)
+        self.assertIn("<answer>B</answer>", text)
+        self.assertNotIn("SECRET_EXPLANATION", text)
+        for question in questions:
+            self.assertIn(question["question"], text)
+            self.assertIn(f"../data/{question['images']['1']}", text)
+        self.assertEqual(len(posts), 2)
+        for name, content in preserved.items():
+            self.assertEqual((run_dir / name).read_bytes(), content)
+
     def test_pilot_uses_cheapest_model_and_writes_a_review_report(self):
         self.prepare(count=3)
         prices = {self.identifiers[0]: 0.000005, self.identifiers[2]: 0.0000001}
@@ -617,6 +651,8 @@ class PilotTests(TemporaryWorkspace):
         text = report.read_text(encoding="utf-8")
         self.assertIn("````text\nThinking...\n```\n<answer>C</answer>\n````", text)
         self.assertIn("2 / 2", text)
+        self.assertIn("../../images/test_Accounting_1_1.png", text)
+        self.assertNotIn("test_Accounting_3", text)
         for identifier in self.identifiers:
             self.assertIn(identifier, text)
         self.assertNotIn("accuracy", text.lower())
