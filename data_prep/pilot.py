@@ -121,7 +121,8 @@ def write_report(run_dir, model_id, catalog, total_questions, data_dir):
     return path, stats
 
 
-def run_pilot(data_dir, config_path, questions=10, model_id=None, output_dir=None, workers_per_model=None):
+def run_pilot(data_dir, config_path, questions=10, model_id=None, output_dir=None, workers_per_model=None,
+              retry_errors=False, requests_per_minute=None):
     data_dir = Path(data_dir)
     config = load_config(config_path)
     load_questions(data_dir, questions)  # Fail locally before any network access.
@@ -135,7 +136,7 @@ def run_pilot(data_dir, config_path, questions=10, model_id=None, output_dir=Non
     output_dir = Path(output_dir) if output_dir else data_dir / "runs" / f"pilot_{slug}_{questions}"
     summary = collect_dataset(
         data_dir, output_dir, config_path, model_ids=[model_id], limit=questions,
-        workers_per_model=workers_per_model,
+        workers_per_model=workers_per_model, retry_errors=retry_errors, requests_per_minute=requests_per_minute,
     )
     manifest = data_dir / "dataset_manifest.json"
     total = read_json(manifest)["question_count"] if manifest.exists() else len(load_questions(data_dir))

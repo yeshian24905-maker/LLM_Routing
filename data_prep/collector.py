@@ -29,6 +29,33 @@ GENERATION_LOOKUP_DELAYS = (0, 1, 2, 4, 8)
 MAX_RETRY_DELAY = 120
 
 
+class RequestPacer:
+    """Space every POST attempt across all workers serving the same model."""
+
+    def __init__(self, requests_per_minute):
+        self.interval = 60.0 / requests_per_minute
+        self.next_allowed = 0.0
+        self.lock = threading.Lock()
+
+    def wait(self, stop=None):
+        while stop is None or not stop.is_set():
+            with self.lock:
+                now = time.monotonic()
+                delay = self.next_allowed - now
+                if delay <= 0:
+                    self.next_allowed = now + self.interval
+                    return True
+            if stop is None:
+                time.sleep(delay)
+            elif stop.wait(delay):
+                return False
+        return False
+
+    def defer(self, seconds):
+        with self.lock:
+            self.next_allowed = max(self.next_allowed, time.monotonic() + seconds)
+
+
 def api_client(config, require_key=True):
     key = os.environ.get(config["api_key_env"], "").strip()
     if require_key and not key:
@@ -166,7 +193,18 @@ def read_completion(payload):
 
 def retry_delay(attempt, response=None):
     if response is not None:
-        header = response.headers.get("retry-after")
+        headers = {}
+        try:
+            payload = response.json()
+            error = payload.get("error") if isinstance(payload, dict) else None
+            metadata = error.get("metadata") if isinstance(error, dict) else None
+            embedded = metadata.get("headers") if isinstance(metadata, dict) else None
+            if isinstance(embedded, dict):
+                headers.update({key.lower(): str(value) for key, value in embedded.items()})
+        except ValueError:
+            pass
+        headers.update(response.headers)
+        header = headers.get("retry-after")
         if header:
             try:
                 return min(MAX_RETRY_DELAY, max(0.0, float(header)))
@@ -175,6 +213,12 @@ def retry_delay(attempt, response=None):
                     return min(MAX_RETRY_DELAY, max(0.0, parsedate_to_datetime(header).timestamp() - time.time()))
                 except (TypeError, ValueError):
                     pass
+        reset = nonnegative_number(headers.get("x-ratelimit-reset"))
+        if reset is not None:
+            reset = reset / 1000 if reset > 100_000_000_000 else reset
+            remaining = reset - time.time()
+            if remaining > 0:
+                return min(MAX_RETRY_DELAY, remaining + 1)
     return min(60.0, 2.0 * 2 ** (attempt - 1)) * random.uniform(0.5, 1.0)
 
 
@@ -193,30 +237,41 @@ def produced_no_answer(response):
     return payload["error"].get("code") in RETRYABLE_STATUS
 
 
-def post_with_retries(client, request, max_attempts, stop=None):
+def post_with_retries(client, request, max_attempts, stop=None, pacer=None):
     """POST until a model response arrives; retry only failures that carry no answer."""
     log = []
+    response = exception = None
     for attempt in range(1, max_attempts + 1):
+        if stop is not None and stop.is_set():
+            break
+        if pacer is not None and not pacer.wait(stop):
+            break
+        response = exception = None
         started = time.perf_counter()
         try:
             response = client.post("chat/completions", json=request)
         except httpx.RequestError as exc:
+            exception = exc
             log.append({"attempt": attempt, "error": f"{type(exc).__name__}: {exc}",
                         "latency": round(time.perf_counter() - started, 6)})
-            if attempt == max_attempts or (stop is not None and stop.is_set()):
-                return None, exc, log
-            time.sleep(retry_delay(attempt))
-            continue
-        log.append({"attempt": attempt, "status": response.status_code,
-                    "latency": round(time.perf_counter() - started, 6)})
-        if attempt < max_attempts and produced_no_answer(response) and not (stop is not None and stop.is_set()):
-            time.sleep(retry_delay(attempt, response))
-            continue
-        return response, None, log
-    raise AssertionError("unreachable")
+            retry = attempt < max_attempts
+        else:
+            log.append({"attempt": attempt, "status": response.status_code,
+                        "latency": round(time.perf_counter() - started, 6)})
+            retry = attempt < max_attempts and produced_no_answer(response)
+        if not retry or (stop is not None and stop.is_set()):
+            break
+        delay = retry_delay(attempt, response)
+        if pacer is not None and response is not None and response.status_code == 429:
+            pacer.defer(delay)
+        if stop is None:
+            time.sleep(delay)
+        elif stop.wait(delay):
+            break
+    return response, exception, log
 
 
-def collect_one(client, question, model, messages, config, stop=None):
+def collect_one(client, question, model, messages, config, stop=None, pacer=None):
     row = dict.fromkeys(FIELDS)
     row.update({
         "question_id": question["question_id"], "subject": question["subject"],
@@ -228,7 +283,9 @@ def collect_one(client, question, model, messages, config, stop=None):
         **parameters, "model": model["id"], "messages": messages,
         "max_tokens": config["max_output_tokens"], "stream": False,
     }
-    response, exception, transport_log = post_with_retries(client, request, config["max_attempts"], stop)
+    response, exception, transport_log = post_with_retries(client, request, config["max_attempts"], stop, pacer)
+    if not transport_log:
+        return None  # Cancelled before any request was sent; leave the pair pending.
     row["latency"] = transport_log[-1]["latency"]
     payload, status, errors = None, None, []
     if response is None:
@@ -293,7 +350,7 @@ def format_duration(seconds):
 
 def collect_dataset(
     data_dir, output_dir, config_path, model_ids=None, limit=None,
-    dry_run=False, retry_errors=False, workers_per_model=None,
+    dry_run=False, retry_errors=False, workers_per_model=None, requests_per_minute=None,
 ):
     data_dir, output_dir = Path(data_dir).resolve(), Path(output_dir).resolve()
     config = load_config(config_path)
@@ -301,6 +358,8 @@ def collect_dataset(
     workers = workers_per_model or config["concurrency_per_model"]
     if workers <= 0:
         raise ValueError("workers_per_model must be positive")
+    if requests_per_minute is not None and (type(requests_per_minute) is not int or requests_per_minute <= 0):
+        raise ValueError("requests_per_minute must be a positive integer")
     questions = load_questions(data_dir, limit)
     print(f"Selected {len(questions)} questions x {len(models)} models = {len(questions) * len(models)} pairs")
     if dry_run:
@@ -336,7 +395,8 @@ def collect_dataset(
             pending = [
                 (question, model) for question in questions for model in models
                 if (question["question_id"], model["id"]) not in records
-                or (retry_errors and is_api_error(records[(question["question_id"], model["id"])]["result"]))
+                or (retry_errors and is_api_error(records[(question["question_id"], model["id"])]["result"])
+                    and not records[(question["question_id"], model["id"])]["result"]["raw_response"])
             ]
             skipped = len(questions) * len(models) - len(pending)
             print(f"Pending {len(pending)} pairs; skipping {skipped} previously recorded pairs", flush=True)
@@ -349,6 +409,9 @@ def collect_dataset(
             snapshot_name = "catalog_" + utc_now().replace(":", "-") + ".json"
             write_json(output_dir / "catalogs" / snapshot_name, snapshot)
             print(f"Sending with {workers} concurrent requests per model ({workers * len(models)} total)", flush=True)
+            pacers = {model["id"]: RequestPacer(requests_per_minute) for model in models} if requests_per_minute else {}
+            if requests_per_minute:
+                print(f"Pacing all POST attempts at no more than {requests_per_minute} per minute per model", flush=True)
 
             stop = threading.Event()
             counters = {"requested": 0, "errors": 0, "cost": 0.0, "announced": False}
@@ -357,8 +420,9 @@ def collect_dataset(
             def task(question, model):
                 if stop.is_set():
                     return None
-                attempt = collect_one(client, question, model, build_messages(question, data_dir), config, stop)
-                if attempt["http_status"] in STOP_STATUS:
+                attempt = collect_one(client, question, model, build_messages(question, data_dir), config, stop,
+                                      pacers.get(model["id"]))
+                if attempt is not None and attempt["http_status"] in STOP_STATUS:
                     # Set in the worker so no other worker starts a new request first.
                     stop.set()
                 return attempt

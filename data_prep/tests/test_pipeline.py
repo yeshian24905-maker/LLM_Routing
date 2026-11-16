@@ -22,7 +22,9 @@ from PIL import Image
 
 from data_prep import dataset
 from data_prep.__main__ import main
-from data_prep.collector import collect_dataset, collect_one, fetch_catalog, reported_metrics
+from data_prep.collector import (
+    RequestPacer, collect_dataset, collect_one, fetch_catalog, post_with_retries, reported_metrics, retry_delay,
+)
 from data_prep.common import (
     DEFAULT_CONFIG, FIELDS, append_attempt, latest_results, load_config, read_json, read_jsonl,
     recover_journal, request_costs, sha256_file, write_json, write_jsonl,
@@ -402,6 +404,72 @@ class CollectOneTests(TemporaryWorkspace):
         self.assertIn("api_error: choice error", row["error"])
 
 
+class PacingTests(TemporaryWorkspace):
+    def test_pacer_spaces_attempts_and_shares_a_cooldown(self):
+        clock = [0.0]
+
+        def wait(seconds):
+            clock[0] += seconds
+            return False
+
+        stop = SimpleNamespace(is_set=lambda: False, wait=wait)
+        with patch("data_prep.collector.time.monotonic", side_effect=lambda: clock[0]):
+            pacer = RequestPacer(15)
+            self.assertTrue(pacer.wait(stop))
+            self.assertEqual(clock[0], 0)
+            self.assertTrue(pacer.wait(stop))
+            self.assertEqual(clock[0], 4)
+            pacer.defer(10)
+            self.assertTrue(pacer.wait(stop))
+            self.assertEqual(clock[0], 14)
+
+    def test_embedded_reset_header_delays_the_retry(self):
+        clock = [0.0]
+        calls = []
+
+        def wait(seconds):
+            clock[0] += seconds
+            return False
+
+        def handler(request):
+            calls.append(clock[0])
+            if len(calls) == 1:
+                return httpx.Response(429, json={"error": {"code": 429, "metadata": {
+                    "headers": {"X-RateLimit-Reset": "1800000060000", "X-RateLimit-Limit": "20"},
+                }}})
+            return httpx.Response(200, json=completion())
+
+        stop = SimpleNamespace(is_set=lambda: False, wait=wait)
+        with self.client(handler) as client, \
+                patch("data_prep.collector.time.monotonic", side_effect=lambda: clock[0]), \
+                patch("data_prep.collector.time.time", side_effect=lambda: 1800000000 + clock[0]):
+            response, exception, attempts = post_with_retries(client, {}, 5, stop, RequestPacer(15))
+        self.assertEqual(calls, [0, 61])
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(exception)
+        self.assertEqual(len(attempts), 2)
+
+    def test_retry_delay_reads_a_reset_from_http_headers(self):
+        response = httpx.Response(429, headers={"X-RateLimit-Reset": "1800000060"})
+        with patch("data_prep.collector.time.time", return_value=1800000000):
+            self.assertEqual(retry_delay(1, response), 61)
+
+    def test_stop_during_backoff_prevents_another_request(self):
+        calls = []
+        stop = threading.Event()
+
+        def interrupted_wait(seconds):
+            stop.set()
+            return True
+
+        with self.client(lambda request: calls.append(request) or httpx.Response(429, json={"error": "limited"})) as client, \
+                patch.object(stop, "wait", side_effect=interrupted_wait):
+            response, _, attempts = post_with_retries(client, {}, 5, stop)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(response.status_code, 429)
+
+
 class AccountingTests(TemporaryWorkspace):
     def test_reported_cost_wins_and_zero_cost_is_valid(self):
         for cost in (0, 0.123456):
@@ -480,6 +548,26 @@ class CatalogTests(TemporaryWorkspace):
 
 
 class RunTests(TemporaryWorkspace):
+    def test_retry_errors_preserves_a_recorded_partial_answer(self):
+        self.prepare()
+        calls = []
+
+        def handler(request):
+            if request.method == "GET":
+                return httpx.Response(200, json=catalog_entries(self.identifiers))
+            calls.append(request)
+            choice = {"message": {"content": "B. 20"}, "finish_reason": "error", "error": {"code": 502}}
+            return httpx.Response(200, json=completion(choices=[choice]))
+
+        run_dir = self.root / "run"
+        with self.run_api(handler), redirect_stdout(StringIO()):
+            collect_dataset(self.data_dir, run_dir, self.config_path, model_ids=self.identifiers[:1])
+            result = collect_dataset(self.data_dir, run_dir, self.config_path,
+                                     model_ids=self.identifiers[:1], retry_errors=True)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result["requested"], 0)
+        self.assertEqual(next(iter(latest_results(run_dir / "attempts.jsonl").values()))["raw_response"], "B. 20")
+
     def test_four_models_run_in_parallel_resume_and_retry_only_failed_requests(self):
         self.prepare(count=3)
         failing, empty = self.identifiers[1], self.identifiers[2]
@@ -598,6 +686,40 @@ class RunTests(TemporaryWorkspace):
 
 
 class PilotTests(TemporaryWorkspace):
+    def test_pilot_command_retries_only_failed_pairs_with_pacing(self):
+        self.prepare(count=2)
+        self.config["max_attempts"] = 1
+        write_json(self.config_path, self.config)
+        calls = []
+
+        def handler(request):
+            if request.method == "GET":
+                return httpx.Response(200, json=catalog_entries(self.identifiers))
+            calls.append(request)
+            if len(calls) == 1:
+                return httpx.Response(429, json={"error": {"code": 429, "message": "rate limited"}})
+            return httpx.Response(200, json=completion(id=f"gen-{len(calls)}"))
+
+        run_dir = self.root / "run"
+        factory = lambda *args, **kwargs: self.client(handler)
+        with self.run_api(handler), patch("data_prep.pilot.api_client", side_effect=factory), redirect_stdout(StringIO()):
+            summary, _ = run_pilot(self.data_dir, self.config_path, questions=2,
+                                   model_id=self.identifiers[0], output_dir=run_dir, workers_per_model=1)
+            self.assertEqual(summary["errors"], 1)
+            with patch("data_prep.collector.RequestPacer.wait", return_value=True) as paced:
+                result = main([
+                    "pilot", "--data-dir", str(self.data_dir), "--config", str(self.config_path),
+                    "--model", self.identifiers[0], "--n", "2", "--output-dir", str(run_dir),
+                    "--retry-errors", "--requests-per-minute", "15", "--workers-per-model", "1",
+                ])
+            self.assertEqual(paced.call_count, 1)
+        self.assertEqual(result, 0)
+        self.assertEqual(len(calls), 3)
+        rows = list(latest_results(run_dir / "attempts.jsonl").values())
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(row["error"] is None for row in rows))
+        self.assertEqual(len(list(read_jsonl(run_dir / "attempts.jsonl"))), 3)
+
     def test_report_can_be_rebuilt_offline_with_questions_options_and_images(self):
         questions = self.prepare(count=2)
         posts = []

@@ -54,6 +54,7 @@ def parser():
     run.add_argument("--retry-errors", action="store_true",
                      help="Re-send pairs whose request failed without a model response (api_error rows)")
     run.add_argument("--workers-per-model", type=positive_int, help="Concurrent requests per model (default: config)")
+    run.add_argument("--requests-per-minute", type=positive_int, help="Maximum POST attempts per minute per model, including retries")
 
     pilot = commands.add_parser("pilot", help="Small paid trial on one model, with a report for manual review")
     pilot.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
@@ -62,6 +63,8 @@ def parser():
     pilot.add_argument("--n", type=positive_int, default=10, help="Number of questions (default: %(default)s)")
     pilot.add_argument("--output-dir", type=Path, help="Default: DATA_DIR/runs/pilot_<model>_<n>")
     pilot.add_argument("--workers-per-model", type=positive_int)
+    pilot.add_argument("--retry-errors", action="store_true", help="Retry recorded API failures with no response text")
+    pilot.add_argument("--requests-per-minute", type=positive_int, help="Maximum POST attempts per minute, including retries")
 
     export = commands.add_parser("export", help="Rebuild CSV, JSONL, and summary from the attempts journal")
     export.add_argument("--run-dir", type=Path, default=DEFAULT_DATA_DIR / "runs" / "default")
@@ -90,6 +93,7 @@ def main(argv=None):
                 config_path=arguments.config, model_ids=arguments.models, limit=arguments.limit,
                 dry_run=arguments.dry_run, retry_errors=arguments.retry_errors,
                 workers_per_model=arguments.workers_per_model,
+                requests_per_minute=arguments.requests_per_minute,
             )
             print(f"Collection finished: {summary}")
             return int(summary["errors"] > 0 or summary.get("not_sent", 0) > 0)
@@ -97,6 +101,7 @@ def main(argv=None):
             summary, _ = run_pilot(
                 arguments.data_dir, arguments.config, arguments.n, arguments.model,
                 arguments.output_dir, arguments.workers_per_model,
+                retry_errors=arguments.retry_errors, requests_per_minute=arguments.requests_per_minute,
             )
             return int(summary["errors"] > 0 or summary.get("not_sent", 0) > 0)
         elif arguments.command == "export":

@@ -73,6 +73,18 @@ Defaults: data in `data_prep/output/mmmu_test_sample/`, full run in its `runs/de
 - `run --retry-errors` re-sends only pairs that ended with an `api_error` (no model response). Re-asking pairs that did get a response is a separate, later step after manual review.
 - **Model settings** (`config.json`): all models share `reasoning.effort = "low"`, `max_tokens = 16384`, and a 600 s timeout. `concurrency_per_model` (8) requests run in parallel per model, 32 in total.
 
+## Rate-Limited Accounts
+
+Concurrency and requests per minute are different limits. Use `--requests-per-minute` to pace every POST attempt, including retries, across all workers for each selected model. On 429 errors, retries also honor `Retry-After` or `X-RateLimit-Reset`, including headers embedded in the error metadata.
+
+For an account limited to 20 requests per minute, run at 15 per minute with one worker. To repair only API failures among the first 110 questions and refresh the pilot report:
+
+```powershell
+python -m data_prep pilot --model openai/gpt-5.6-luna --n 110 --output-dir data_prep/output/mmmu_test_sample/runs/sequential --retry-errors --requests-per-minute 15 --workers-per-model 1
+```
+
+Keep the original data directory and output directory. Existing responses are skipped; `--retry-errors` only selects API-error rows without captured response text. An absent `finish_reason` after HTTP 429 means no completion was received. To continue through all 1000 questions, use the same command with `--n 1000`. Pacing and worker options do not change the experiment identity, so the existing journal can be resumed.
+
 ## Output
 
 `results.csv` / `results.jsonl` hold the latest observation per `(question_id, model)` with 13 fields:
