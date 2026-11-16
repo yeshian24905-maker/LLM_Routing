@@ -1,12 +1,13 @@
-"""Download, validate, and construct multimodal MMMU inputs."""
+"""Download a seeded MMMU sample, store its images, and construct multimodal prompts."""
 
 import ast
 import base64
 import hashlib
+import io
 import os
+import random
 import re
 from collections import Counter
-from itertools import islice
 from pathlib import Path
 
 from .common import json_dumps, read_json, read_jsonl, sha256_file, utc_now, write_json
@@ -21,6 +22,10 @@ SUBJECTS = (
     "Marketing", "Materials", "Math", "Mechanical_Engineering", "Music", "Pharmacy",
     "Physics", "Psychology", "Public_Health", "Sociology",
 )
+SPLITS = ("dev", "validation", "test")
+DEFAULT_SPLITS = ("test",)
+DEFAULT_SAMPLE_SIZE = 1000
+DEFAULT_SEED = 20261116
 IMAGE_MARKER = re.compile(r"<image\s+(\d+)>", re.I)
 SYSTEM_PROMPT = (
     "Solve the given question using its text and images. "
@@ -29,6 +34,11 @@ SYSTEM_PROMPT = (
     "For multiple-choice questions return exactly one option letter. "
     "For open questions return the short answer, including units if needed."
 )
+# Provider limits: Anthropic rejects images over 8000 px per side or 5 MB (base64 grows 4/3).
+MAX_IMAGE_SIDE = 7680
+MAX_IMAGE_BYTES = 3_750_000
+MIME_TYPES = {".png": "image/png", ".jpg": "image/jpeg"}
+SIXTEEN_BIT_MODES = ("I", "I;16", "I;16B", "I;16L", "I;16N")
 
 
 def parse_options(value):
@@ -75,10 +85,96 @@ def validate_question(question):
         raise ValueError(f"{question['question_id']}: missing images {sorted(missing)}")
 
 
-def normalize_row(row, subject, split, output_dir):
-    from PIL import ImageOps
+def has_transparency(image):
+    if image.mode in ("RGBA", "LA", "PA", "RGBa", "La"):
+        return image.getchannel("A").getextrema()[0] < 255
+    return "transparency" in image.info
 
-    images = {str(index): row[f"image_{index}"] for index in range(1, 8) if row.get(f"image_{index}") is not None}
+
+def flatten_on_white(image):
+    """Composite transparent pixels onto white; a plain RGB conversion turns them black."""
+    from PIL import Image
+
+    rgba = image.convert("RGBA")
+    background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+    return Image.alpha_composite(background, rgba).convert("RGB")
+
+
+def prepare_image(data):
+    """Return (bytes, extension, info). Original JPEG/PNG bytes are kept whenever possible."""
+    from PIL import Image, ImageOps
+
+    with Image.open(io.BytesIO(data)) as source:
+        source.load()
+        source_format = source.format
+        orientation = source.getexif().get(0x0112, 1)
+        transparent = has_transparency(source)
+        info = {
+            "source_format": source_format, "source_mode": source.mode,
+            "source_size": list(source.size), "source_bytes": len(data),
+            "flattened_transparency": transparent, "exif_rotated": orientation not in (1, None),
+            "resized": False,
+        }
+        keep = (
+            not transparent and not info["exif_rotated"]
+            and max(source.size) <= MAX_IMAGE_SIDE and len(data) <= MAX_IMAGE_BYTES
+            and (
+                (source_format == "JPEG" and source.mode in ("L", "RGB"))
+                # Fully opaque alpha cannot turn black, so such PNGs are kept as well.
+                or (source_format == "PNG" and source.mode in ("1", "L", "P", "RGB", "LA", "RGBA"))
+            )
+        )
+        if keep:
+            info.update(reencoded=False, stored_size=list(source.size))
+            return data, ".jpg" if source_format == "JPEG" else ".png", info
+
+        image = ImageOps.exif_transpose(source)
+        if transparent:
+            image = flatten_on_white(image)
+        elif image.mode in SIXTEEN_BIT_MODES:
+            image = image.convert("I").point(lambda value: value * (1 / 256)).convert("RGB")
+        else:
+            image = image.convert("RGB")
+    output_format = "JPEG" if source_format == "JPEG" and not transparent else "PNG"
+    while True:
+        if max(image.size) > MAX_IMAGE_SIDE:
+            scale = MAX_IMAGE_SIDE / max(image.size)
+            image = image.resize(
+                (max(1, round(image.width * scale)), max(1, round(image.height * scale))),
+                Image.Resampling.LANCZOS,
+            )
+            info["resized"] = True
+        buffer = io.BytesIO()
+        if output_format == "JPEG":
+            image.save(buffer, format="JPEG", quality=92)
+        else:
+            image.save(buffer, format="PNG", optimize=True)
+        encoded = buffer.getvalue()
+        if len(encoded) <= MAX_IMAGE_BYTES:
+            break
+        image = image.resize(
+            (max(1, int(image.width * 0.8)), max(1, int(image.height * 0.8))),
+            Image.Resampling.LANCZOS,
+        )
+        info["resized"] = True
+    info.update(reencoded=True, stored_size=list(image.size))
+    return encoded, ".jpg" if output_format == "JPEG" else ".png", info
+
+
+def normalize_row(row, subject, split, output_dir):
+    """Validate one parquet row and write its images; raise ValueError for unusable rows."""
+    prepared = {}
+    for index in range(1, 8):
+        value = row.get(f"image_{index}")
+        if value is None:
+            continue
+        data = value.get("bytes") if isinstance(value, dict) else None
+        if not data:
+            raise ValueError(f"{row.get('id')}: image_{index} has no embedded bytes")
+        try:
+            prepared[str(index)] = prepare_image(data)
+        except OSError as exc:
+            raise ValueError(f"{row.get('id')}: image_{index} cannot be decoded: {exc}") from exc
     question = {
         "question_id": row["id"],
         "subject": subject,
@@ -89,71 +185,154 @@ def normalize_row(row, subject, split, output_dir):
         "correct_answer": row["answer"],
         "subfield": row.get("subfield"),
         "topic_difficulty": row.get("topic_difficulty"),
-        "images": {index: f"images/{row['id']}_{index}.png" for index in images},
+        "images": {index: f"images/{row['id']}_{index}{ext}" for index, (_, ext, _) in prepared.items()},
         "image_sha256": {},
+        "image_processing": {index: info for index, (_, _, info) in prepared.items()},
     }
     # Validate IDs, labels, and references before writing any files.
     validate_question(question)
-    for index, image in images.items():
+    for index, (data, _, _) in prepared.items():
         target = Path(output_dir) / question["images"][index]
         target.parent.mkdir(parents=True, exist_ok=True)
-        ImageOps.exif_transpose(image).convert("RGB").save(target, format="PNG")
-        question["image_sha256"][index] = sha256_file(target)
+        target.write_bytes(data)
+        question["image_sha256"][index] = hashlib.sha256(data).hexdigest()
     return question
 
 
-def download_dataset(output_dir, splits, subjects=None, limit_per_subject=None, revision="main"):
+def allocate(sample_size, available, rng):
+    """Split sample_size as evenly as possible across subjects, capped by availability."""
+    if sample_size > sum(available.values()):
+        raise ValueError(f"Requested {sample_size} questions but only {sum(available.values())} exist")
+    quota = {subject: 0 for subject in available}
+    # Seeded tie-break order decides which subjects receive the remainder.
+    order = sorted(available)
+    rng.shuffle(order)
+    remaining = sample_size
+    while remaining:
+        open_subjects = [subject for subject in order if quota[subject] < available[subject]]
+        level = min(quota[subject] for subject in open_subjects)
+        for subject in open_subjects:
+            if remaining and quota[subject] == level:
+                quota[subject] += 1
+                remaining -= 1
+    return quota
+
+
+def download_dataset(
+    output_dir, splits=DEFAULT_SPLITS, subjects=None, sample_size=DEFAULT_SAMPLE_SIZE,
+    seed=DEFAULT_SEED, revision="main",
+):
+    """Download whole parquet files, then keep a seeded, subject-balanced, shuffled sample.
+
+    sample_size=None keeps every question. Unusable rows are skipped, recorded in the
+    manifest, and replaced by the next question in the same subject's seeded order.
+    """
     output_dir = Path(output_dir).resolve()
     subjects = list(dict.fromkeys(subjects or SUBJECTS))
     splits = list(dict.fromkeys(splits))
     if set(subjects) - set(SUBJECTS):
         raise ValueError(f"Unknown MMMU subjects: {sorted(set(subjects) - set(SUBJECTS))}")
-    if set(splits) - {"dev", "validation", "test"} or not splits:
+    if set(splits) - set(SPLITS) or not splits:
         raise ValueError("Use dev, validation, or test splits")
-    if limit_per_subject is not None and limit_per_subject <= 0:
-        raise ValueError("limit_per_subject must be positive")
+    if sample_size is not None and sample_size <= 0:
+        raise ValueError("sample_size must be positive")
     if (output_dir / "questions.jsonl").exists() or (output_dir / "dataset_manifest.json").exists():
         raise ValueError(f"Dataset already exists at {output_dir}; use a new output directory")
     output_dir.mkdir(parents=True, exist_ok=True)
     # Keep default download caches inside the workspace; respect explicit user settings.
     os.environ.setdefault("HF_HOME", str(output_dir / ".cache" / "huggingface"))
-    from datasets import load_dataset
-    from huggingface_hub import HfApi
+    import pyarrow.parquet as pq
+    from huggingface_hub import HfApi, hf_hub_download
 
-    resolved_revision = HfApi().dataset_info(DATASET_ID, revision=revision).sha
+    api = HfApi()
+    resolved_revision = api.dataset_info(DATASET_ID, revision=revision).sha
     if not resolved_revision:
         raise ValueError("Could not resolve MMMU dataset revision")
-    counts = Counter()
-    seen = set()
+    repo_files = api.list_repo_files(DATASET_ID, repo_type="dataset", revision=resolved_revision)
+
+    # Phase 1: fetch each subject's parquet files and list candidate IDs in source order.
+    local_files, candidates, source_files = {}, {}, []
+    for subject in subjects:
+        candidates[subject] = []
+        for split in splits:
+            names = sorted(
+                name for name in repo_files
+                if name.startswith(f"{subject}/{split}-") and name.endswith(".parquet")
+            )
+            if not names:
+                raise ValueError(f"No parquet files for {subject}/{split} at {resolved_revision}")
+            for name in names:
+                print(f"Downloading {name} ...", flush=True)
+                local = hf_hub_download(
+                    DATASET_ID, name, repo_type="dataset", revision=resolved_revision,
+                    cache_dir=str(output_dir / ".cache" / "hub"),
+                )
+                source_files.append({"file": name, "sha256": sha256_file(local)})
+                local_files[name] = local
+                identifiers = pq.read_table(local, columns=["id"]).column("id").to_pylist()
+                candidates[subject] += [(name, split, position, identifier) for position, identifier in enumerate(identifiers)]
+    available = {subject: len(rows) for subject, rows in candidates.items()}
+    quota = available if sample_size is None else allocate(sample_size, available, random.Random(f"{seed}:allocation"))
+
+    # Phase 2: walk each subject's seeded order until its quota of usable questions is met.
+    selected, skipped, seen = [], [], set()
+    for subject in subjects:
+        order = list(candidates[subject])
+        random.Random(f"{seed}:{subject}").shuffle(order)
+        # Load one subject at a time; the full test split is about 3 GB with images.
+        tables = {name: pq.read_table(local_files[name]) for name in {item[0] for item in order}}
+        taken = 0
+        for name, split, position, identifier in order:
+            if taken == quota[subject]:
+                break
+            row = tables[name].slice(position, 1).to_pylist()[0]
+            try:
+                if identifier in seen:
+                    raise ValueError(f"Duplicate question ID: {identifier}")
+                question = normalize_row(row, subject, split, output_dir)
+            except (ValueError, SyntaxError) as exc:
+                skipped.append({"question_id": identifier, "reason": str(exc)})
+                continue
+            seen.add(identifier)
+            selected.append(question)
+            taken += 1
+        if sample_size is not None and taken < quota[subject]:
+            raise ValueError(f"{subject}: only {taken} usable questions for a quota of {quota[subject]}")
+        print(f"Selected {taken} questions from {subject}", flush=True)
+    if not selected:
+        raise ValueError("No questions downloaded")
+    # A global shuffle makes every prefix (e.g. `run --limit 100`) a mixed-subject sample.
+    random.Random(f"{seed}:order").shuffle(selected)
+
     temporary = output_dir / "questions.jsonl.tmp"
     with temporary.open("w", encoding="utf-8", newline="\n") as stream:
-        for subject in subjects:
-            for split in splits:
-                print(f"Downloading {subject}/{split} ...", flush=True)
-                dataset = load_dataset(
-                    DATASET_ID, subject, split=split, revision=resolved_revision,
-                    streaming=True, cache_dir=str(output_dir / ".cache" / "datasets"),
-                )
-                selected_rows = islice(dataset, limit_per_subject) if limit_per_subject is not None else dataset
-                for row in selected_rows:
-                    question = normalize_row(row, subject, split, output_dir)
-                    if question["question_id"] in seen:
-                        raise ValueError(f"Duplicate question ID: {question['question_id']}")
-                    seen.add(question["question_id"])
-                    stream.write(json_dumps(question) + "\n")
-                    counts[f"{subject}/{split}"] += 1
-    if not seen:
-        raise ValueError("No questions downloaded")
+        for question in selected:
+            stream.write(json_dumps(question) + "\n")
     questions_hash = sha256_file(temporary)
     temporary.replace(output_dir / "questions.jsonl")
+    image_stats = Counter()
+    for question in selected:
+        for info in question["image_processing"].values():
+            image_stats["images"] += 1
+            for flag in ("reencoded", "flattened_transparency", "resized", "exif_rotated"):
+                image_stats[flag] += bool(info[flag])
     manifest = {
         "dataset": DATASET_ID, "requested_revision": revision,
         "resolved_revision": resolved_revision, "created_at": utc_now(),
-        "splits": splits, "subjects": subjects, "limit_per_subject": limit_per_subject,
-        "question_count": len(seen), "counts": dict(counts), "questions_sha256": questions_hash,
+        "splits": splits, "subjects": subjects,
+        "sampling": {
+            "method": "subject-balanced seeded sample, globally shuffled" if sample_size else "all questions, globally shuffled",
+            "sample_size": sample_size, "seed": seed, "quota_per_subject": quota,
+        },
+        "question_count": len(selected),
+        "counts": dict(Counter(f"{q['subject']}/{q['split']}" for q in selected)),
+        "question_types": dict(Counter(q["question_type"] for q in selected)),
+        "skipped_rows": skipped, "image_stats": dict(image_stats),
+        "source_files": source_files, "question_ids": [q["question_id"] for q in selected],
+        "questions_sha256": questions_hash,
     }
     write_json(output_dir / "dataset_manifest.json", manifest)
-    print(f"Saved {len(seen)} labeled questions to {output_dir}")
+    print(f"Saved {len(selected)} labeled questions to {output_dir} ({len(skipped)} unusable rows skipped)")
     return manifest
 
 
@@ -162,6 +341,8 @@ def local_image_bytes(data_dir, question, index):
     path = (root / question["images"][index]).resolve()
     if not path.is_relative_to(root):
         raise ValueError(f"Image path leaves data directory: {path}")
+    if path.suffix not in MIME_TYPES:
+        raise ValueError(f"Unsupported image type: {path}")
     image_bytes = path.read_bytes()
     expected = question.get("image_sha256", {}).get(index)
     if expected and hashlib.sha256(image_bytes).hexdigest() != expected:
@@ -205,8 +386,9 @@ def build_messages(question, data_dir):
     content, included = [], set()
 
     def attach_image(index):
+        mime = MIME_TYPES[Path(question["images"][index]).suffix]
         encoded = base64.b64encode(local_image_bytes(data_dir, question, index)).decode("ascii")
-        content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}})
+        content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}})
         included.add(index)
 
     offset = 0
