@@ -68,7 +68,7 @@ Defaults: data in `data_prep/output/mmmu_test_sample/`, full run in its `runs/de
 
 - **One question, one answer.** Whatever the model returns is recorded as is: empty answers, refusals, truncated output (`finish_reason=length`), answers without an `<answer>` tag. None of these are errors and none are re-asked.
 - **Only requests with no model response are retried automatically**: network errors, timeouts, HTTP 408/429/5xx, and HTTP 200 bodies that only carry such an error. Up to `max_attempts` (5) tries with exponential backoff that honors `Retry-After`. Every try is logged in `transport_attempts`. A timed-out request may still have been processed and billed upstream; this cannot be detected.
-- **HTTP 401/402/403** stops all workers; requests already in flight are still recorded.
+- **HTTP 401/402 and generic 403** stop all workers; requests already in flight are still recorded. A 403 explicitly identifying input moderation through `metadata.reasons` and `metadata.flagged_input` is recorded as `moderation_error` and does not stop unrelated questions. Such refusals are preserved for review and excluded from `--retry-errors`.
 - **Missing billing data** (`accounting_error`): only the billing endpoint is queried again (on the next `run`), never the model.
 - `run --retry-errors` re-sends only pairs that ended with an `api_error` (no model response). Re-asking pairs that did get a response is a separate, later step after manual review.
 - **Model settings** (`config.json`): all models share `reasoning.effort = "low"`, `max_tokens = 16384`, and a 600 s timeout. `concurrency_per_model` (8) requests run in parallel per model, 32 in total.
@@ -85,6 +85,8 @@ python -m data_prep pilot --model openai/gpt-5.6-luna --n 110 --output-dir data_
 
 Keep the original data directory and output directory. Existing responses are skipped; `--retry-errors` only selects API-error rows without captured response text. An absent `finish_reason` after HTTP 429 means no completion was received. To continue through all 1000 questions, use the same command with `--n 1000`. Pacing and worker options do not change the experiment identity, so the existing journal can be resumed.
 
+Legacy 403 moderation failures are classified when the journal is read, so resuming skips them without another model request. Their original HTTP status, provider payload, and journal lines remain available. Summaries and pilot reports list input moderation refusals separately from API errors. Ordinary permission or budget errors still stop the run. A completed run with only moderation refusals has exit code 0; unresolved API/accounting errors or unsent pairs still return 1.
+
 ## Output
 
 `results.csv` / `results.jsonl` hold the latest observation per `(question_id, model)` with 13 fields:
@@ -100,7 +102,7 @@ Keep the original data directory and output directory. Existing responses are sk
 | `reasoning_tokens` | Reported reasoning tokens (subset of output), null if not reported |
 | `cost` | Actual billed USD (`usage.cost`, else `/generation` `total_cost`); 0 is a real value |
 | `latency` | Seconds for the final HTTP attempt |
-| `error` | `api_error: ...` (no usable response) or `accounting_error: ...`; null otherwise |
+| `error` | `api_error: ...`, `moderation_error: ...`, or `accounting_error: ...`; null otherwise |
 
 Other files in the run directory:
 

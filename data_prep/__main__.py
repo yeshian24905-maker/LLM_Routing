@@ -96,14 +96,14 @@ def main(argv=None):
                 requests_per_minute=arguments.requests_per_minute,
             )
             print(f"Collection finished: {summary}")
-            return int(summary["errors"] > 0 or summary.get("not_sent", 0) > 0)
+            return int(summary["errors"] > summary.get("moderation_refusals", 0) or summary.get("not_sent", 0) > 0)
         elif arguments.command == "pilot":
             summary, _ = run_pilot(
                 arguments.data_dir, arguments.config, arguments.n, arguments.model,
                 arguments.output_dir, arguments.workers_per_model,
                 retry_errors=arguments.retry_errors, requests_per_minute=arguments.requests_per_minute,
             )
-            return int(summary["errors"] > 0 or summary.get("not_sent", 0) > 0)
+            return int(summary["errors"] > summary.get("moderation_refusals", 0) or summary.get("not_sent", 0) > 0)
         elif arguments.command == "export":
             with FileLock(str(arguments.run_dir / "run.lock"), timeout=0):
                 recover_journal(arguments.run_dir / "attempts.jsonl")

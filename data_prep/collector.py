@@ -16,7 +16,7 @@ import httpx
 from filelock import FileLock
 
 from .common import (
-    FIELDS, PROMPT_VERSION, append_attempt, export_results, is_api_error, latest_records,
+    FIELDS, PROMPT_VERSION, append_attempt, export_results, is_api_error, is_moderation_error, latest_records,
     load_config, nonnegative_number, read_json, recover_journal, request_parameters,
     select_models, sha256_file, utc_now, write_json,
 )
@@ -237,6 +237,16 @@ def produced_no_answer(response):
     return payload["error"].get("code") in RETRYABLE_STATUS
 
 
+def should_stop(attempt):
+    if attempt is None:
+        return False
+    payload = attempt.get("response")
+    error = payload.get("error") if isinstance(payload, dict) else None
+    code = nonnegative_number(error.get("code"), integer=True) if isinstance(error, dict) else None
+    return ((attempt["http_status"] in STOP_STATUS or code in STOP_STATUS)
+            and not is_moderation_error(payload, attempt["http_status"]))
+
+
 def post_with_retries(client, request, max_attempts, stop=None, pacer=None):
     """POST until a model response arrives; retry only failures that carry no answer."""
     log = []
@@ -299,6 +309,8 @@ def collect_one(client, question, model, messages, config, stop=None, pacer=None
         if not isinstance(payload, dict):
             row["raw_response"] = response.text
             errors.append(f"api_error: HTTP {status}; response is not a JSON object")
+        elif is_moderation_error(payload, status):
+            errors.append(f"moderation_error: HTTP {status}; {payload['error']}")
         elif status >= 400 or (payload.get("error") and not payload.get("choices")):
             errors.append(f"api_error: HTTP {status}; {payload.get('error', payload)} (after {len(transport_log)} attempts)")
         else:
@@ -414,7 +426,7 @@ def collect_dataset(
                 print(f"Pacing all POST attempts at no more than {requests_per_minute} per minute per model", flush=True)
 
             stop = threading.Event()
-            counters = {"requested": 0, "errors": 0, "cost": 0.0, "announced": False}
+            counters = {"requested": 0, "errors": 0, "moderation_refusals": 0, "cost": 0.0, "announced": False}
             started = time.monotonic()
 
             def task(question, model):
@@ -422,7 +434,7 @@ def collect_dataset(
                     return None
                 attempt = collect_one(client, question, model, build_messages(question, data_dir), config, stop,
                                       pacers.get(model["id"]))
-                if attempt is not None and attempt["http_status"] in STOP_STATUS:
+                if should_stop(attempt):
                     # Set in the worker so no other worker starts a new request first.
                     stop.set()
                 return attempt
@@ -433,6 +445,7 @@ def collect_dataset(
                 row = attempt["result"]
                 counters["requested"] += 1
                 counters["errors"] += int(row["error"] is not None)
+                counters["moderation_refusals"] += int((row["error"] or "").startswith("moderation_error:"))
                 counters["cost"] += row["cost"] or 0
                 done = counters["requested"]
                 elapsed = time.monotonic() - started
@@ -444,7 +457,7 @@ def collect_dataset(
                     f"known cost ${counters['cost']:.4f}",
                     flush=True,
                 )
-                if attempt["http_status"] in STOP_STATUS and not counters["announced"]:
+                if should_stop(attempt) and not counters["announced"]:
                     counters["announced"] = True
                     stop.set()
                     print(f"Stopping on authentication/credit/access error: {row['error']}", flush=True)
@@ -487,4 +500,5 @@ def collect_dataset(
     not_sent = len(pending) - counters["requested"]
     if not_sent:
         print(f"{not_sent} pairs were not sent; run the same command again to continue")
-    return {"requested": counters["requested"], "skipped": skipped, "errors": counters["errors"], "not_sent": not_sent}
+    return {"requested": counters["requested"], "skipped": skipped, "errors": counters["errors"],
+            "moderation_refusals": counters["moderation_refusals"], "not_sent": not_sent}

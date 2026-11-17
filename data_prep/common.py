@@ -187,6 +187,20 @@ def recover_journal(path):
                 return
 
 
+def is_moderation_error(payload, http_status=None):
+    """Recognize explicit input moderation; generic permission/budget errors stay fatal."""
+    if not isinstance(payload, dict) or payload.get("choices"):
+        return False
+    error = payload.get("error")
+    if not isinstance(error, dict) or http_status not in (None, 200, 403):
+        return False
+    if nonnegative_number(error.get("code", http_status), integer=True) != 403:
+        return False
+    metadata = error.get("metadata")
+    return (isinstance(metadata, dict) and isinstance(metadata.get("reasons"), list)
+            and bool(metadata["reasons"]) and isinstance(metadata.get("flagged_input"), str))
+
+
 def latest_records(journal_path):
     """Latest journal record per (question_id, model) pair."""
     latest = {}
@@ -195,6 +209,10 @@ def latest_records(journal_path):
             row = record["result"]
             if set(row) != set(FIELDS):
                 raise ValueError("Unexpected result schema in attempts.jsonl")
+            # Classify old moderation failures without changing the original journal.
+            if is_api_error(row) and is_moderation_error(record.get("response"), record.get("http_status")):
+                row = {**row, "error": row["error"].replace("api_error:", "moderation_error:", 1)}
+                record = {**record, "result": row}
             latest[(row["question_id"], row["model"])] = record
     return latest
 
@@ -216,7 +234,8 @@ def request_costs(journal_path):
             continue
         response = record.get("response")
         generation_id = response.get("id") if isinstance(response, dict) else None
-        if is_api_error(record["result"]) and record["result"]["cost"] is None:
+        error = record["result"]["error"] or ""
+        if error.startswith(("api_error", "moderation_error")) and record["result"]["cost"] is None:
             failed += 1
             continue
         costs[generation_id if isinstance(generation_id, str) else f"line-{number}"] = record["result"]["cost"]
@@ -240,6 +259,7 @@ def summarize_rows(rows):
         "rows": len(rows),
         "errors": sum(row["error"] is not None for row in rows),
         "api_errors": sum(is_api_error(row) for row in rows),
+        "moderation_refusals": sum((row["error"] or "").startswith("moderation_error:") for row in rows),
         "finish_reasons": dict(Counter(str(row["finish_reason"]) for row in rows)),
         "empty_responses": sum(not (row["raw_response"] or "").strip() for row in rows),
         "mean_input_tokens": mean(present("input_tokens")),

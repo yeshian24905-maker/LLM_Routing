@@ -26,7 +26,7 @@ from data_prep.collector import (
     RequestPacer, collect_dataset, collect_one, fetch_catalog, post_with_retries, reported_metrics, retry_delay,
 )
 from data_prep.common import (
-    DEFAULT_CONFIG, FIELDS, append_attempt, latest_results, load_config, read_json, read_jsonl,
+    DEFAULT_CONFIG, FIELDS, append_attempt, latest_records, latest_results, load_config, read_json, read_jsonl,
     recover_journal, request_costs, sha256_file, write_json, write_jsonl,
 )
 from data_prep.dataset import (
@@ -87,6 +87,14 @@ def catalog_entries(identifiers, prices=None):
             "completion": str((prices or {}).get(identifier, 0.000002)),
         },
     } for identifier in identifiers]}
+
+
+def moderation_payload():
+    return {"error": {
+        "code": 403,
+        "message": "Input requires moderation and was flagged. No credits were charged.",
+        "metadata": {"reasons": ["violence/graphic"], "flagged_input": "An educational benchmark question"},
+    }}
 
 
 def write_parquet(path, rows):
@@ -322,6 +330,18 @@ class SamplingTests(TemporaryWorkspace):
 
 
 class CollectOneTests(TemporaryWorkspace):
+    def test_input_moderation_is_recorded_once_with_the_original_payload(self):
+        calls = []
+        payload = moderation_payload()
+        attempt = self.collect(lambda request: calls.append(request) or httpx.Response(403, json=payload))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(attempt["http_status"], 403)
+        self.assertEqual(attempt["response"], payload)
+        self.assertTrue(attempt["result"]["error"].startswith("moderation_error:"))
+        self.assertIsNone(attempt["result"]["finish_reason"])
+        self.assertIsNone(attempt["result"]["raw_response"])
+        self.assertIsNone(attempt["result"]["cost"])
+
     def collect(self, handler, **config_changes):
         question = self.prepare()[0]
         config = {**self.config, **config_changes}
@@ -548,6 +568,67 @@ class CatalogTests(TemporaryWorkspace):
 
 
 class RunTests(TemporaryWorkspace):
+    def test_moderation_preserves_the_refusal_and_continues_other_questions(self):
+        self.prepare(count=3)
+        calls = []
+
+        def handler(request):
+            if request.method == "GET":
+                return httpx.Response(200, json=catalog_entries(self.identifiers))
+            calls.append(request)
+            if len(calls) == 1:
+                return httpx.Response(403, json=moderation_payload())
+            return httpx.Response(200, json=completion(id=f"gen-{len(calls)}"))
+
+        run_dir = self.root / "run"
+        with self.run_api(handler), redirect_stdout(StringIO()):
+            result = collect_dataset(self.data_dir, run_dir, self.config_path,
+                                     model_ids=self.identifiers[:1], workers_per_model=1)
+            self.assertEqual((result["requested"], result["not_sent"], result["moderation_refusals"]), (3, 0, 1))
+            self.assertEqual(result["errors"], 1)
+            # Simulate an older journal where the moderation refusal was an api_error.
+            records = list(read_jsonl(run_dir / "attempts.jsonl"))
+            records[0]["result"]["error"] = records[0]["result"]["error"].replace("moderation_error:", "api_error:", 1)
+            write_jsonl(run_dir / "attempts.jsonl", records)
+            original_journal = (run_dir / "attempts.jsonl").read_bytes()
+            resumed = collect_dataset(self.data_dir, run_dir, self.config_path,
+                                      model_ids=self.identifiers[:1], retry_errors=True)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(resumed["requested"], 0)
+        self.assertEqual((run_dir / "attempts.jsonl").read_bytes(), original_journal)
+        latest = latest_records(run_dir / "attempts.jsonl")
+        refusal = next(record for record in latest.values() if record["http_status"] == 403)
+        self.assertEqual(refusal["response"], moderation_payload())
+        self.assertTrue(refusal["result"]["error"].startswith("moderation_error:"))
+        stats = read_json(run_dir / "summary.json")["models"][self.identifiers[0]]
+        self.assertEqual((stats["rows"], stats["api_errors"], stats["moderation_refusals"]), (3, 0, 1))
+        self.assertEqual(request_costs(run_dir / "attempts.jsonl")["completion_requests"], 2)
+        self.assertEqual(request_costs(run_dir / "attempts.jsonl")["failed_requests"], 1)
+
+    def test_generic_and_embedded_forbidden_errors_still_stop_the_run(self):
+        self.prepare(count=3)
+        cases = (
+            (403, {"error": {"code": 403, "message": "Account does not have permission"}}),
+            (403, {"error": {"code": 403, "message": "Budget exceeded", "metadata": {
+                "limit_source": "openrouter_guardrail_budget", "reasons": ["budget"],
+            }}}),
+            (200, {"error": {"code": 403, "message": "Account does not have permission"}}),
+        )
+        for index, (status, payload) in enumerate(cases):
+            calls = []
+
+            def handler(request):
+                if request.method == "GET":
+                    return httpx.Response(200, json=catalog_entries(self.identifiers))
+                calls.append(request)
+                return httpx.Response(status, json=payload)
+
+            with self.subTest(status=status, payload=payload), self.run_api(handler), redirect_stdout(StringIO()):
+                result = collect_dataset(self.data_dir, self.root / f"run_{index}", self.config_path,
+                                         model_ids=self.identifiers[:1], workers_per_model=1)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual((result["errors"], result["not_sent"], result["moderation_refusals"]), (1, 2, 0))
+
     def test_retry_errors_preserves_a_recorded_partial_answer(self):
         self.prepare()
         calls = []
@@ -686,6 +767,27 @@ class RunTests(TemporaryWorkspace):
 
 
 class PilotTests(TemporaryWorkspace):
+    def test_pilot_completes_with_a_separately_reported_moderation_refusal(self):
+        self.prepare()
+
+        def handler(request):
+            return httpx.Response(200, json=catalog_entries(self.identifiers)) if request.method == "GET" else \
+                httpx.Response(403, json=moderation_payload())
+
+        factory = lambda *args, **kwargs: self.client(handler)
+        run_dir = self.root / "run"
+        with self.run_api(handler), patch("data_prep.pilot.api_client", side_effect=factory), redirect_stdout(StringIO()):
+            result = main([
+                "pilot", "--data-dir", str(self.data_dir), "--config", str(self.config_path),
+                "--model", self.identifiers[0], "--n", "1", "--output-dir", str(run_dir),
+                "--workers-per-model", "1",
+            ])
+        self.assertEqual(result, 0)
+        text = (run_dir / "pilot_report.md").read_text(encoding="utf-8")
+        self.assertIn("| Input moderation refusals | 1 |", text)
+        self.assertIn("| API errors | 0 |", text)
+        self.assertIn("moderation_error:", text)
+
     def test_pilot_command_retries_only_failed_pairs_with_pacing(self):
         self.prepare(count=2)
         self.config["max_attempts"] = 1

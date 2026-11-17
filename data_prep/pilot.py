@@ -54,7 +54,8 @@ def write_report(run_dir, model_id, catalog, total_questions, data_dir):
         "| Metric | Value |", "| --- | --- |",
         f"| Questions | {len(rows)} |",
         f"| API errors | {stats['api_errors']} |",
-        f"| Other errors (e.g. missing billing data) | {stats['errors'] - stats['api_errors']} |",
+        f"| Input moderation refusals | {stats['moderation_refusals']} |",
+        f"| Other errors (e.g. missing billing data) | {stats['errors'] - stats['api_errors'] - stats['moderation_refusals']} |",
         f"| finish_reason | {', '.join(f'{key}: {value}' for key, value in sorted(stats['finish_reasons'].items()))} |",
         f"| Empty responses | {stats['empty_responses']} |",
         f"| Responses containing an `<answer>...</answer>` tag | {tagged} / {len(rows)} |",
@@ -143,7 +144,8 @@ def run_pilot(data_dir, config_path, questions=10, model_id=None, output_dir=Non
     path, stats = write_report(output_dir, model_id, catalog, total, data_dir)
     print(f"Pilot report written to {path}")
     print(
-        f"  {stats['rows']} responses, {stats['api_errors']} API errors, finish_reason {stats['finish_reasons']}, "
+        f"  {stats['rows']} records, {stats['api_errors']} API errors, "
+        f"{stats['moderation_refusals']} input moderation refusals, finish_reason {stats['finish_reasons']}, "
         f"known cost ${stats['known_cost_usd']:.4f}"
     )
     return summary, path
