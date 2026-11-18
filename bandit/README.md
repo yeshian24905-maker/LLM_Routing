@@ -51,8 +51,25 @@ UCB_m(t) = mean_m + sqrt(2 * ln(t) / N_m)
 
 这评估的是**有即时标准答案反馈时的在线学习过程**，不需要先将 1000 题划成训练集和测试集。
 它不能代替冻结路由器后在独立测试集上的泛化评估。重复回放的标准差只反映同一批数据上顺序与随机性的影响。
-UCB1 不使用题目内容或学科特征，目标是寻找整体表现较好的模型；当前奖励只优化准确率。
-费用、延迟单独统计。如需优化费用，必须先另外确定奖励中的费用权重和范围。
+UCB1 不使用题目内容或学科特征，目标是寻找整体表现较好的模型。`ucb1` 的奖励只看准确率，费用、延迟单独统计。
+
+## 成本加权奖励
+
+`--value-per-correct V` 为每个 V 增加一个 `ucb1-cost[V=…]` 策略。V 是“答对一题值多少美元”，奖励为：
+
+```text
+净值 = correct − min(cost / V, 1)        取值 [-1, 1]
+reward = (净值 + 1) / 2                  映射到 UCB1 要求的 [0, 1]
+```
+
+两个模型之间，多出的准确率乘以 V 大于多出的平均费用时，策略才偏向更贵的模型。
+例如在多花 0.0026 美元、多答对 8.5% 时，V 约为 0.031 是分界点。
+单次费用超过 V 时惩罚截断为 1。缺失费用按满惩罚 1 处理，不当成免费。
+延迟不进入奖励。
+
+```powershell
+python -m bandit --input data_prep/output/run/result.csv --value-per-correct 0.01 0.03 0.1
+```
 
 UCB1 公式依据：[Auer et al., 2002](https://people.eecs.berkeley.edu/~russell/classes/cs294/s11/readings/Auer%2Bal%3A2002.pdf)。
 
@@ -93,7 +110,7 @@ python -m bandit --input data_prep/output/run/result.csv --labels reviewed_label
 | --- | --- |
 | `scored_results.csv` | 原始字段、抽取答案、0/1 得分、评分来源、人工复核标记 |
 | `runs.csv` | 各次回放、各策略的准确率、已知费用、未知费用条数、延迟、regret、模型选择次数 |
-| `trace.csv` | UCB 与随机路由每轮选择、奖励、累计准确率、累计已知费用、regret；可用于画学习曲线 |
+| `trace.csv` | 各 UCB 策略与随机路由每轮选择、奖励、累计准确率、累计已知费用、regret；可用于画学习曲线 |
 | `summary.json` | 均值与标准差、模型选择次数均值、输入文件哈希、评分统计 |
 | `report.md` | 可读的实验比较表和评估限制 |
 

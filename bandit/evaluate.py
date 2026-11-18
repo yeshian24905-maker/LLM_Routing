@@ -4,17 +4,22 @@ import random
 import statistics
 from collections import Counter
 
+from .reward import accuracy_reward, cost_reward
 from .ucb import UCB1
 
 
-def select_ucb(table, models, order, seed):
+def cost_policy_name(value_per_correct):
+    return f"ucb1-cost[V={value_per_correct:g}]"
+
+
+def select_ucb(table, models, order, seed, reward=accuracy_reward):
     policy = UCB1(models, seed=f"ucb:{seed}")
     selected = []
     for question_id in order:
         # Select before looking up this prompt's response or score.
         model = policy.select()
         observation = table[question_id][model]
-        policy.update(model, observation.correct)
+        policy.update(model, reward(observation))
         selected.append(observation)
     return selected
 
@@ -66,7 +71,7 @@ def trace_rows(table, models, selected, seed, policy):
         }
 
 
-def evaluate(table, models, repeats=30, seed=42):
+def evaluate(table, models, repeats=30, seed=42, values_per_correct=()):
     if repeats < 1:
         raise ValueError("repeats must be positive")
     question_ids = sorted(table)
@@ -80,15 +85,17 @@ def evaluate(table, models, repeats=30, seed=42):
         order = question_ids.copy()
         random.Random(f"order:{run_seed}").shuffle(order)
         random_policy = random.Random(f"random:{run_seed}")
-        selections = {
-            "ucb1": select_ucb(table, models, order, run_seed),
-            "random": [table[qid][random_policy.choice(models)] for qid in order],
-        }
+        selections = {"ucb1": select_ucb(table, models, order, run_seed)}
+        for value in values_per_correct:
+            selections[cost_policy_name(value)] = select_ucb(
+                table, models, order, run_seed, lambda row, value=value: cost_reward(row, value),
+            )
+        selections["random"] = [table[qid][random_policy.choice(models)] for qid in order]
         for model in models:
             selections[f"fixed:{model}"] = [table[qid][model] for qid in order]
         for name, selected in selections.items():
             runs.append({"seed": run_seed, "policy": name, **metrics(selected, best_fixed_reward, oracle_reward)})
-            if name in ("ucb1", "random"):
+            if not name.startswith("fixed:"):
                 traces.extend(trace_rows(table, models, selected, run_seed, name))
     aggregate = {}
     for name in dict.fromkeys(row["policy"] for row in runs):
@@ -109,6 +116,7 @@ def evaluate(table, models, repeats=30, seed=42):
         }
     return {
         "prompts": len(table), "models": models, "repeats": repeats,
+        "values_per_correct": list(values_per_correct),
         "seeds": list(range(seed, seed + repeats)),
         "best_fixed_models": [model for model in models if fixed_rewards[model] == best_fixed_reward],
         "best_fixed_accuracy": best_fixed_reward / len(table),

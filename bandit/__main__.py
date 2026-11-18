@@ -4,6 +4,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 from collections import Counter
 from pathlib import Path
 
@@ -35,6 +36,7 @@ def make_report(summary):
         "Reward: correct = 1, incorrect / empty / failed request = 0. "
         "Each replay starts with an empty UCB1 state and uses each prompt once. "
         "Only the selected model's reward updates the policy. Exploration rounds count toward all metrics.", "",
+        *cost_reward_note(summary["values_per_correct"]),
         "| Policy | Accuracy (mean +/- SD) | Known cost, USD (mean) | Unknown costs (mean count) | Regret vs best fixed (mean) |",
         "| --- | ---: | ---: | ---: | ---: |",
     ]
@@ -62,9 +64,20 @@ def make_report(summary):
         "The SD describes sensitivity to prompt order and random choices on this same dataset. "
         "It is not a confidence interval for unseen prompts. This is an online-learning replay "
         "with immediate ground-truth feedback, and uses no separate training/test split. "
-        "UCB1 ignores prompt features and optimizes accuracy; cost and latency are reported separately.", "",
+        "UCB1 ignores prompt features. Plain ucb1 optimizes accuracy only. "
+        "Latency is reported separately and never enters a reward.", "",
     ])
     return "\n".join(lines)
+
+
+def cost_reward_note(values_per_correct):
+    if not values_per_correct:
+        return []
+    return [
+        "Each ucb1-cost[V=v] policy is UCB1 with reward correct - min(cost / v, 1), "
+        "mapped from [-1, 1] to [0, 1]. Here v is the USD value of one correct answer. "
+        "An unknown cost gets the full penalty of 1.", "",
+    ]
 
 
 def main(argv=None):
@@ -74,13 +87,21 @@ def main(argv=None):
     parser.add_argument("--expected-prompts", type=int, default=1000)
     parser.add_argument("--repeats", type=int, default=30)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--value-per-correct", type=float, nargs="+", default=[], metavar="USD",
+        help="Add one cost-aware UCB1 policy for each value: the USD value of one correct answer.",
+    )
     parser.add_argument("--labels", type=Path, help="Optional reviewed question_id,model,correct CSV (0/1).")
     args = parser.parse_args(argv)
     if args.expected_prompts < 1 or args.repeats < 1:
         parser.error("--expected-prompts and --repeats must be positive")
+    if any(not math.isfinite(value) or value <= 0 for value in args.value_per_correct):
+        parser.error("--value-per-correct values must be positive")
     try:
         table, models, scored = load_data(args.input, args.expected_prompts, args.labels)
-        summary, runs, traces = evaluate(table, models, args.repeats, args.seed)
+        summary, runs, traces = evaluate(
+            table, models, args.repeats, args.seed, args.value_per_correct,
+        )
     except (OSError, ValueError, csv.Error) as exc:
         parser.error(str(exc))
     summary.update(
