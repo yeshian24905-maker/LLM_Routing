@@ -1,15 +1,20 @@
-"""Replay each prompt once, revealing only the selected arm's reward to UCB1."""
+"""Replay each prompt once, revealing only the selected arm's result to the policy."""
 
 import random
 import statistics
 from collections import Counter
 
 from .reward import accuracy_reward, cost_reward
+from .target_ucb import TargetUCB
 from .ucb import UCB1
 
 
 def cost_policy_name(value_per_correct):
     return f"ucb1-cost[V={value_per_correct:g}]"
+
+
+def target_policy_name(target):
+    return f"target-ucb[tau={target:g}]"
 
 
 def select_ucb(table, models, order, seed, reward=accuracy_reward):
@@ -22,6 +27,43 @@ def select_ucb(table, models, order, seed, reward=accuracy_reward):
         policy.update(model, reward(observation))
         selected.append(observation)
     return selected
+
+
+def select_target(table, models, order, seed, target, initial_value, step):
+    policy = TargetUCB(models, target, initial_value, step, seed=f"target:{seed}")
+    selected = []
+    for question_id in order:
+        model = policy.select()
+        observation = table[question_id][model]
+        policy.update(model, observation.correct, observation.cost)
+        selected.append(observation)
+    return selected
+
+
+def best_mix_cost(table, models, target):
+    """Lowest expected USD cost of a fixed random mix of models with mean accuracy >= target.
+
+    It uses every model's result on every prompt, so no router can rely on it.
+    A mix of two models is enough because there is only one constraint.
+    Returns None when no model reaches the target.
+    """
+    question_ids = list(table)
+    accuracy, cost = {}, {}
+    for model in models:
+        rows = [table[qid][model] for qid in question_ids]
+        accuracy[model] = sum(row.correct for row in rows) / len(rows)
+        known = [row.cost for row in rows if row.cost is not None]
+        cost[model] = statistics.mean(known) if known else float("inf")
+    best = None
+    for low in models:
+        for high in models:
+            if not accuracy[low] <= target <= accuracy[high]:
+                continue
+            spread = accuracy[high] - accuracy[low]
+            share = (target - accuracy[low]) / spread if spread else 1.0
+            mix = (1 - share) * cost[low] + share * cost[high]
+            best = mix if best is None else min(best, mix)
+    return None if best is None else best * len(question_ids)
 
 
 def metrics(selected, best_fixed_reward, oracle_reward):
@@ -71,7 +113,10 @@ def trace_rows(table, models, selected, seed, policy):
         }
 
 
-def evaluate(table, models, repeats=30, seed=42, values_per_correct=()):
+def evaluate(
+    table, models, repeats=30, seed=42, values_per_correct=(),
+    targets=(), initial_value=1.0, step=0.3,
+):
     if repeats < 1:
         raise ValueError("repeats must be positive")
     question_ids = sorted(table)
@@ -89,6 +134,10 @@ def evaluate(table, models, repeats=30, seed=42, values_per_correct=()):
         for value in values_per_correct:
             selections[cost_policy_name(value)] = select_ucb(
                 table, models, order, run_seed, lambda row, value=value: cost_reward(row, value),
+            )
+        for target in targets:
+            selections[target_policy_name(target)] = select_target(
+                table, models, order, run_seed, target, initial_value, step,
             )
         selections["random"] = [table[qid][random_policy.choice(models)] for qid in order]
         for model in models:
@@ -117,6 +166,17 @@ def evaluate(table, models, repeats=30, seed=42, values_per_correct=()):
     return {
         "prompts": len(table), "models": models, "repeats": repeats,
         "values_per_correct": list(values_per_correct),
+        "targets": [
+            {
+                "policy": target_policy_name(target), "target": target,
+                "runs_meeting_target": sum(
+                    row["accuracy"] >= target for row in runs if row["policy"] == target_policy_name(target)
+                ),
+                "best_mix_cost_usd": best_mix_cost(table, models, target),
+            }
+            for target in targets
+        ],
+        "target_initial_value": initial_value, "target_step": step,
         "seeds": list(range(seed, seed + repeats)),
         "best_fixed_models": [model for model in models if fixed_rewards[model] == best_fixed_reward],
         "best_fixed_accuracy": best_fixed_reward / len(table),

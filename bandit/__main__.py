@@ -48,6 +48,7 @@ def make_report(summary):
             f"| {values['unknown_cost_count']['mean']:.2f} "
             f"| {values['regret_vs_best_fixed']['mean']:.2f} |"
         )
+    lines.extend(target_section(summary))
     lines.extend([
         "", f"Oracle accuracy upper bound: {summary['oracle_accuracy']:.2%}. "
         "The oracle sees every model's score; it is only a comparison and cannot be deployed.", "",
@@ -80,6 +81,33 @@ def cost_reward_note(values_per_correct):
     ]
 
 
+def target_section(summary):
+    if not summary["targets"]:
+        return []
+    lines = [
+        "", "## Accuracy targets", "",
+        "Each target-ucb[tau=t] policy picks the model with the largest KL-UCB accuracy "
+        "minus mean known cost / V. V is the USD value of one correct answer. "
+        f"It starts at {summary['target_initial_value']:g} and changes after each answer by "
+        f"log V += {summary['target_step']:g} * (t - correct). "
+        "Best mix is the lowest expected cost of a fixed random mix of models with full-data "
+        "accuracy >= t. It knows every model's result, so it is a reference, not a router.", "",
+        "| Policy | Accuracy (mean +/- SD) | Runs meeting target | Known cost, USD (mean) | Best mix cost, USD |",
+        "| --- | ---: | ---: | ---: | ---: |",
+    ]
+    for entry in summary["targets"]:
+        values = summary["policies"][entry["policy"]]
+        accuracy = values["accuracy"]
+        best_mix = entry["best_mix_cost_usd"]
+        lines.append(
+            f"| {entry['policy']} | {accuracy['mean']:.2%} +/- {accuracy['std']:.2%} "
+            f"| {entry['runs_meeting_target']}/{summary['repeats']} "
+            f"| {values['known_cost_usd']['mean']:.6f} "
+            f"| {'no model reaches the target' if best_mix is None else f'{best_mix:.6f}'} |"
+        )
+    return lines
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Offline UCB1 routing from an existing complete response CSV.")
     parser.add_argument("--input", type=Path, default=Path("data_prep/output/run/result.csv"))
@@ -91,16 +119,33 @@ def main(argv=None):
         "--value-per-correct", type=float, nargs="+", default=[], metavar="USD",
         help="Add one cost-aware UCB1 policy for each value: the USD value of one correct answer.",
     )
+    parser.add_argument(
+        "--target-accuracy", type=float, nargs="+", default=[], metavar="TAU",
+        help="Add one TargetUCB policy for each accuracy target in (0, 1].",
+    )
+    parser.add_argument(
+        "--target-initial-value", type=float, default=1.0, metavar="USD",
+        help="Initial USD value of one correct answer for TargetUCB (default: 1).",
+    )
+    parser.add_argument(
+        "--target-step", type=float, default=0.3,
+        help="Step of the TargetUCB update log V += step * (target - correct) (default: 0.3).",
+    )
     parser.add_argument("--labels", type=Path, help="Optional reviewed question_id,model,correct CSV (0/1).")
     args = parser.parse_args(argv)
     if args.expected_prompts < 1 or args.repeats < 1:
         parser.error("--expected-prompts and --repeats must be positive")
     if any(not math.isfinite(value) or value <= 0 for value in args.value_per_correct):
         parser.error("--value-per-correct values must be positive")
+    if any(not 0 < target <= 1 for target in args.target_accuracy):
+        parser.error("--target-accuracy values must be in (0, 1]")
+    if not all(math.isfinite(x) and x > 0 for x in (args.target_initial_value, args.target_step)):
+        parser.error("--target-initial-value and --target-step must be positive")
     try:
         table, models, scored = load_data(args.input, args.expected_prompts, args.labels)
         summary, runs, traces = evaluate(
             table, models, args.repeats, args.seed, args.value_per_correct,
+            args.target_accuracy, args.target_initial_value, args.target_step,
         )
     except (OSError, ValueError, csv.Error) as exc:
         parser.error(str(exc))

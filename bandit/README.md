@@ -71,6 +71,33 @@ reward = (净值 + 1) / 2                  映射到 UCB1 要求的 [0, 1]
 python -m bandit --input data_prep/output/run/result.csv --value-per-correct 0.01 0.03 0.1
 ```
 
+## 准确率目标下降低成本
+
+固定的 V 无法直接对应一个准确率。`--target-accuracy τ` 为每个 τ 增加一个 `target-ucb[tau=…]` 策略
+（[target_ucb.py](target_ucb.py)），目标是在整次回放准确率不低于 τ 的前提下尽量降低费用：
+
+```text
+score_m = KL-UCB(模型 m 的准确率) − 模型 m 的平均已知费用 / V
+答完一题后：log V += step × (τ − correct)
+```
+
+- 答错时 V 变大，策略偏向准确的模型。答对时 V 变小，策略偏向便宜的模型。
+  因此策略会在两个模型之间混合，而不是只收敛到一个模型。
+- 对 T 道题有恒等式：`准确率 = τ + ln(V_初始 / V_最终) / (step × T)`。
+  只要最终 V 不超过初始 V，这次回放就达到目标。初始 V 越大、step 越小，达标越稳，但多花的费用也越多。
+- 准确率上界使用 KL-UCB（[Garivier and Cappé, 2011](https://arxiv.org/abs/1102.2490)），不用 UCB1 的上界。
+  在 1000 题内，UCB1 的探索项过宽，即使只看准确率也只能达到约 87%，接近最佳模型的目标无法达到。
+- 费用不加探索项，只用已知费用的平均值。还没有已知费用的模型，按已知平均费用最高的模型估计。
+- `--target-initial-value`（默认 1 美元）和 `--target-step`（默认 0.3）调节上述取舍。
+
+报告另列“Accuracy targets”表：各次回放中达标的次数，以及 best mix 费用。
+best mix 是用全量数据算出的、平均准确率不低于 τ 的最便宜的固定随机模型混合，只作参照，不能部署。
+在线策略的费用高于 best mix 的部分，是探索和学习的代价。
+
+```powershell
+python -m bandit --input data_prep/output/run/result.csv --target-accuracy 0.84 0.86 0.88
+```
+
 UCB1 公式依据：[Auer et al., 2002](https://people.eecs.berkeley.edu/~russell/classes/cs294/s11/readings/Auer%2Bal%3A2002.pdf)。
 
 ## 回答评分
