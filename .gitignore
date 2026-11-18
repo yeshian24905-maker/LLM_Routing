@@ -6,3 +6,4 @@ __pycache__/
 !.env.example
 /data_prep/output/
 /data_prep/.cache/
+/bandit/output/
