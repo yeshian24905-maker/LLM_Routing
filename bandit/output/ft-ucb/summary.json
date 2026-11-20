@@ -1,0 +1,244 @@
+{
+  "algorithm": "FT-UCB (Algorithm 6, Appendix H)",
+  "prompts": 1000,
+  "models": [
+    "anthropic/claude-haiku-5.5",
+    "openai/gpt-5.6-luna",
+    "google/gemini-3.8-flash",
+    "anthropic/claude-sonnet-5.5"
+  ],
+  "thresholds": [
+    0.89,
+    0.85,
+    0.8,
+    0.825
+  ],
+  "repeats": 1,
+  "seeds": [
+    42
+  ],
+  "primary_seed": 42,
+  "cost_source": "full-data mean of known CSV costs",
+  "arm_costs_usd": {
+    "anthropic/claude-haiku-5.5": 0.0003143207,
+    "anthropic/claude-sonnet-5.5": 0.004460338677354709,
+    "google/gemini-3.8-flash": 0.0029291505,
+    "openai/gpt-5.6-luna": 0.0004662123
+  },
+  "arm_statistics": {
+    "anthropic/claude-haiku-5.5": {
+      "accuracy": 0.826,
+      "mean_known_cost_usd": 0.0003143207,
+      "unknown_cost_count": 0
+    },
+    "anthropic/claude-sonnet-5.5": {
+      "accuracy": 0.878,
+      "mean_known_cost_usd": 0.004460338677354709,
+      "unknown_cost_count": 2
+    },
+    "google/gemini-3.8-flash": {
+      "accuracy": 0.908,
+      "mean_known_cost_usd": 0.0029291505,
+      "unknown_cost_count": 0
+    },
+    "openai/gpt-5.6-luna": {
+      "accuracy": 0.825,
+      "mean_known_cost_usd": 0.0004662123,
+      "unknown_cost_count": 0
+    }
+  },
+  "scenarios": [
+    {
+      "threshold": 0.89,
+      "feasible_models": [
+        "google/gemini-3.8-flash"
+      ],
+      "optimal_feasible_model": "google/gemini-3.8-flash",
+      "infeasible": false,
+      "runs_meeting_threshold": 0,
+      "metrics": {
+        "accuracy": {
+          "mean": 0.826,
+          "std": 0.0
+        },
+        "correct": {
+          "mean": 826,
+          "std": 0.0
+        },
+        "total_cost_usd": {
+          "mean": 0.3196559,
+          "std": 0.0
+        },
+        "known_cost_usd": {
+          "mean": 0.3196559,
+          "std": 0.0
+        },
+        "unknown_cost_count": {
+          "mean": 0,
+          "std": 0.0
+        },
+        "fixed_cost_total_usd": {
+          "mean": 0.32123343937735344,
+          "std": 0.0
+        },
+        "cost_regret_usd": {
+          "mean": 0.0015311881773547092,
+          "std": 0.0
+        },
+        "quality_regret": {
+          "mean": 63.885000000000055,
+          "std": 0.0
+        }
+      }
+    },
+    {
+      "threshold": 0.85,
+      "feasible_models": [
+        "google/gemini-3.8-flash",
+        "anthropic/claude-sonnet-5.5"
+      ],
+      "optimal_feasible_model": "google/gemini-3.8-flash",
+      "infeasible": false,
+      "runs_meeting_threshold": 0,
+      "metrics": {
+        "accuracy": {
+          "mean": 0.826,
+          "std": 0.0
+        },
+        "correct": {
+          "mean": 826,
+          "std": 0.0
+        },
+        "total_cost_usd": {
+          "mean": 0.3196559,
+          "std": 0.0
+        },
+        "known_cost_usd": {
+          "mean": 0.3196559,
+          "std": 0.0
+        },
+        "unknown_cost_count": {
+          "mean": 0,
+          "std": 0.0
+        },
+        "fixed_cost_total_usd": {
+          "mean": 0.32123343937735344,
+          "std": 0.0
+        },
+        "cost_regret_usd": {
+          "mean": 0.0015311881773547092,
+          "std": 0.0
+        },
+        "quality_regret": {
+          "mean": 23.95300000000061,
+          "std": 0.0
+        }
+      }
+    },
+    {
+      "threshold": 0.8,
+      "feasible_models": [
+        "anthropic/claude-haiku-5.5",
+        "openai/gpt-5.6-luna",
+        "google/gemini-3.8-flash",
+        "anthropic/claude-sonnet-5.5"
+      ],
+      "optimal_feasible_model": "anthropic/claude-haiku-5.5",
+      "infeasible": false,
+      "runs_meeting_threshold": 1,
+      "metrics": {
+        "accuracy": {
+          "mean": 0.826,
+          "std": 0.0
+        },
+        "correct": {
+          "mean": 826,
+          "std": 0.0
+        },
+        "total_cost_usd": {
+          "mean": 0.3196559,
+          "std": 0.0
+        },
+        "known_cost_usd": {
+          "mean": 0.3196559,
+          "std": 0.0
+        },
+        "unknown_cost_count": {
+          "mean": 0,
+          "std": 0.0
+        },
+        "fixed_cost_total_usd": {
+          "mean": 0.32123343937735344,
+          "std": 0.0
+        },
+        "cost_regret_usd": {
+          "mean": 0.006912739377354709,
+          "std": 0.0
+        },
+        "quality_regret": {
+          "mean": 0.0,
+          "std": 0.0
+        }
+      }
+    },
+    {
+      "threshold": 0.825,
+      "feasible_models": [
+        "anthropic/claude-haiku-5.5",
+        "openai/gpt-5.6-luna",
+        "google/gemini-3.8-flash",
+        "anthropic/claude-sonnet-5.5"
+      ],
+      "optimal_feasible_model": "anthropic/claude-haiku-5.5",
+      "infeasible": false,
+      "runs_meeting_threshold": 1,
+      "metrics": {
+        "accuracy": {
+          "mean": 0.826,
+          "std": 0.0
+        },
+        "correct": {
+          "mean": 826,
+          "std": 0.0
+        },
+        "total_cost_usd": {
+          "mean": 0.3196559,
+          "std": 0.0
+        },
+        "known_cost_usd": {
+          "mean": 0.3196559,
+          "std": 0.0
+        },
+        "unknown_cost_count": {
+          "mean": 0,
+          "std": 0.0
+        },
+        "fixed_cost_total_usd": {
+          "mean": 0.32123343937735344,
+          "std": 0.0
+        },
+        "cost_regret_usd": {
+          "mean": 0.006912739377354709,
+          "std": 0.0
+        },
+        "quality_regret": {
+          "mean": 0.0,
+          "std": 0.0
+        }
+      }
+    }
+  ],
+  "regret_estimator": "full-data plug-in gaps; repeated replays average sampled paths",
+  "questions_jsonl": "C:\\Users\\24905\\Desktop\\Project\\LLM_Routing\\mmmu_test_sample\\questions.jsonl",
+  "questions_sha256": "d79a94820292303fcb9eb61d92eb1bfda97a2f3aa35675ac4fe9ca59abf77647",
+  "input_csv": "C:\\Users\\24905\\Desktop\\Project\\LLM_Routing\\mmmu_test_sample\\runs\\sequential\\results.csv",
+  "input_sha256": "6c232e57a77915b9bc27a5e7ac725041eae60d10f11f56dbaa95497820b2cbbf",
+  "arm_costs_json": null,
+  "arm_costs_sha256": null,
+  "labels_csv": null,
+  "labels_sha256": null,
+  "scorer": "tag-first, option-aware deterministic MMMU-style v2 (not the official evaluator)",
+  "grading": {
+    "needs_review": 225
+  }
+}

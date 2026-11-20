@@ -55,7 +55,9 @@ question_id,subject,question_type,model,raw_response,correct_answer,cost,error
 加载器拒绝重复记录和无效费用。其他题量可用 `--expected-prompts N`。
 `question_type` 为 `multiple-choice` 或 `open`。
 
-评分优先提取最后一个完整 `<answer>...</answer>`。选择题识别选项字母；开放题支持备选答案、
+评分优先提取最后一个完整 `<answer>...</answer>`。选择题识别选项字母、`C. 选项文字`，
+或与原始题目某个选项唯一匹配的答案值（例如 `147`）；不使用标准答案来猜选项，也不把 `B, C` 当作单选。
+开放题支持备选答案、
 文本归一化与数字保留两位小数比较。空回答、解析失败和请求错误计 0，
 `accounting_error:` 不影响已有回答的评分。评分参考 MMMU，但不等价于官方评估器。
 开放题及回退解析标记 `needs_review=1`，正式报告前应复核。
@@ -110,6 +112,7 @@ FT-UCB 不保证 1000 轮实际准确率达到阈值；乐观上界可能让便�
 每个阈值的模型选择次数之和为 1000。
 
 再次使用同一输出目录会覆盖同名文件。PNG/PDF 可用于幻灯片。
+`bandit/output/ft-ucb/` 中的正式结果随代码提交到 GitHub；其他实验输出目录仍被忽略。
 
 算法边界、手算 regret、缺失费用及标签隔离的测试代码位于 `bandit/tests/`，需要时手动运行：
 

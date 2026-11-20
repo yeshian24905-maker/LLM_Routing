@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from bandit.data import REQUIRED_FIELDS, Observation, load_data, load_questions
+from bandit.data import REQUIRED_FIELDS, Observation, grade, load_data, load_questions
 from bandit.ft_evaluate import arm_statistics, evaluate_ft, resolve_costs
 from bandit.ft_report import make_ft_report
 from bandit.ft_ucb import FixedThresholdUCB
@@ -178,7 +178,8 @@ class MMMUInputTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.questions = [
             {"question_id": qid, "subject": "Math", "question_type": "multiple-choice",
-             "question": "Choose A.", "correct_answer": "A", "images": {}}
+             "question": "Choose A.", "correct_answer": "A", "images": {},
+             "options": ["First", "Second", "Third", "Fourth"]}
             for qid in ("q2", "q1")
         ]
         raw = "".join(json.dumps(question) + "\n" for question in self.questions).encode()
@@ -231,6 +232,37 @@ class MMMUInputTests(unittest.TestCase):
         self.write_results()
         with self.assertRaisesRegex(ValueError, "Missing model results"):
             load_data(self.path, load_questions(self.root, 2))
+
+
+class ChoiceScoringTests(unittest.TestCase):
+    def score(self, response, gold="B", options=("49", "147", "196")):
+        return grade({"raw_response": response, "question_type": "multiple-choice",
+                      "correct_answer": gold, "error": ""}, options)
+
+    def test_labeled_option_with_explanation_is_recognized(self):
+        self.assertEqual(self.score("<answer>B. 147 units</answer>")[2], 1)
+
+    def test_option_value_without_letter_is_recognized(self):
+        self.assertEqual(self.score("<answer>147</answer>")[0], "B")
+        self.assertEqual(self.score("<answer>147</answer>")[2], 1)
+
+    def test_option_mapping_is_independent_of_gold(self):
+        prediction, _, correct = self.score("<answer>147</answer>", gold="A")
+        self.assertEqual(prediction, "B")
+        self.assertEqual(correct, 0)
+
+    def test_multi_option_answer_remains_ambiguous(self):
+        self.assertEqual(self.score("<answer>B, C</answer>")[0], "")
+        self.assertEqual(self.score("<answer>B, C</answer>")[2], 0)
+
+    def test_duplicate_option_text_is_not_guessed(self):
+        self.assertEqual(self.score("<answer>147</answer>", options=("147", "147"))[0], "")
+
+    def test_last_answer_tag_takes_precedence(self):
+        self.assertEqual(self.score("<answer>B</answer> revised: <answer>A</answer>")[2], 0)
+
+    def test_reasoning_outside_answer_tag_cannot_rescue_bad_answer(self):
+        self.assertEqual(self.score("<answer>no match</answer> Reasoning mentions option B.")[2], 0)
 
 
 if __name__ == "__main__":

@@ -6,5 +6,6 @@ __pycache__/
 !.env.example
 /data_prep/output/
 /data_prep/.cache/
-/bandit/output/
+/bandit/output/*
+!/bandit/output/ft-ucb/
 /mmmu_test_sample/
