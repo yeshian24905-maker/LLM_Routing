@@ -1,145 +1,98 @@
-# UCB1 离线路由实验
+# FT-UCB 离线路由实验
 
-直接复用已收集的回答，不调用模型 API，不增加 API 费用。只依赖 Python 3.10+ 标准库。
+实现论文 [Appendix H, Algorithm 6](https://users.ece.cmu.edu/~oyagan/Conferences/ICLR2025.pdf#page=54)，
+复用已有结果，不调用模型 API。默认 1000 题、四个模型，阈值为 **89%、85%、80%、82.5%**。
+需要 Python 3.10+ 和 Matplotlib。
 
-## 运行
+## 使用
 
-在项目根目录执行。默认读取指定的 `data_prep/output/run/result.csv`：
-
-```powershell
-python -m bandit
-```
-
-当前工作区的完整数据实际位于下面的路径，可以直接指定，无需复制文件：
+以下为手动运行命令，输入路径替换为实际结果文件：
 
 ```powershell
-python -m bandit --input data_prep/output/mmmu_test_sample/runs/sequential/results.csv
+python -m pip install -r bandit/requirements.txt
+python -m bandit --input path/to/results.csv --empirical-costs
 ```
 
-显式指定重复次数、种子和输出目录：
+FT-UCB 是唯一算法，不需要 `--algorithm` 参数。默认做 30 次回放，种子 42–71，输出到
+`bandit/output/ft-ucb/`。`--repeats 1` 只做一次 1000 轮实验；`--seed`、`--output-dir`、
+`--thresholds 0.89 0.85 0.80 0.825` 可覆盖默认设置。
 
-```powershell
-python -m bandit --input data_prep/output/run/result.csv --repeats 30 --seed 42 --output-dir bandit/output/ucb1
-```
+必须明确选择一种成本来源：
 
-输入必须包含 `question_id,subject,question_type,model,raw_response,correct_answer,cost,latency,error`。
-默认要求 **1000 个不同题目，每题每个模型恰好一条记录**，例如四模型共 4000 条。
-脚本拒绝重复记录、不完整的模型覆盖、不一致的标准答案和无效数值；不会静默丢题。
-其他大小的数据可用 `--expected-prompts N`。
+- `--empirical-costs`：以各模型已知 CSV 费用的均值作为固定成本，缺失项不参与计算。
+  这使用全量费用元数据，是对论文“成本事先已知”假设的离线近似，报告会注明。
+- `--arm-costs arm_costs.json`：使用事先给定的固定美元成本。JSON 的键必须是 CSV 中
+  四个模型的完整名称，值为非负有限数值。
 
-## 算法与测试协议
+成本向量在回放期间保持不变。缺失的实际费用不会被替换为零。
 
-一个模型就是一个 arm，一道题就是一轮，奖励为答对 `1`、答错 `0`。
-每次回放随机打乱题目顺序，策略状态从零开始；前 K 轮将每个模型各选一次。
-之后选择下面的分数最大的模型，平分时随机选择：
+## 输入与评分
+
+CSV 必须包含：
 
 ```text
-t = 当前轮数，从 1 开始
-N_m = 前 t-1 轮中模型 m 被选择的次数
-mean_m = 模型 m 在被选择的轮次中获得的平均奖励
-UCB_m(t) = mean_m + sqrt(2 * ln(t) / N_m)
+question_id,subject,question_type,model,raw_response,correct_answer,cost,error
 ```
 
-先选择模型，再查 CSV 中该题该模型的结果，**只用这一个结果更新 UCB**。
-其他模型的结果只用于事后比较。每次回放中，每题仅出现一次，探索轮也计入结果。
-默认使用种子 42 至 71 做 30 次回放；每次回放的 UCB、随机路由和固定模型使用相同题目顺序。
+每题每个模型恰好一条记录，共 4000 条。加载器拒绝重复记录、模型覆盖不完整、
+同一题元数据不一致和无效费用。其他题量可用 `--expected-prompts N`。
+`question_type` 为 `multiple-choice` 或 `open`。
 
-比较对象：UCB1、均匀随机路由、始终使用每一个固定模型。
-另计算逐题选择答对模型的 oracle 准确率上界。
-`regret_vs_best_fixed` 是“最佳固定模型答对数 − 当前策略答对数”；可能为负。
-`gap_to_oracle` 使用逐题 oracle，为非负。trace 中的最佳固定模型按当前前缀计算。
+评分优先提取最后一个完整 `<answer>...</answer>`。选择题识别选项字母；开放题支持备选答案、
+文本归一化与数字保留两位小数比较。空回答、解析失败和请求错误计 0，
+`accounting_error:` 不影响已有回答的评分。评分参考 MMMU，但不等价于官方评估器。
+开放题及回退解析标记 `needs_review=1`，正式报告前应复核。
 
-这评估的是**有即时标准答案反馈时的在线学习过程**，不需要先将 1000 题划成训练集和测试集。
-它不能代替冻结路由器后在独立测试集上的泛化评估。重复回放的标准差只反映同一批数据上顺序与随机性的影响。
-UCB1 不使用题目内容或学科特征，目标是寻找整体表现较好的模型。`ucb1` 的奖励只看准确率，费用、延迟单独统计。
+`--labels reviewed_labels.csv` 可用人工标签覆盖评分，格式为 `question_id,model,correct`，
+其中 `correct` 为 0 或 1；重复键和未知记录会报错。原始 CSV 不会被修改。
 
-## 成本加权奖励
+## 算法与指标
 
-`--value-per-correct V` 为每个 V 增加一个 `ucb1-cost[V=…]` 策略。V 是“答对一题值多少美元”，奖励为：
+模型按固定成本升序编号，相同成本按模型名排序：
 
 ```text
-净值 = correct − min(cost / V, 1)        取值 [-1, 1]
-reward = (净值 + 1) / 2                  映射到 UCB1 要求的 [0, 1]
+前 K 轮依次选择每个模型一次。
+C_t = {m: mean_m + sqrt(2 * ln(t) / N_m) >= mu0}
+若 C_t 非空，选择其中成本最低的模型；否则从所有模型均匀随机选择。
 ```
 
-两个模型之间，多出的准确率乘以 V 大于多出的平均费用时，策略才偏向更贵的模型。
-例如在多花 0.0026 美元、多答对 8.5% 时，V 约为 0.031 是分界点。
-单次费用超过 V 时惩罚截断为 1。缺失费用按满惩罚 1 处理，不当成免费。
-延迟不进入奖励。
+UCB 不截断为 1。先选模型，再读取该题该模型的结果，只更新被选模型。
+每题在一次回放中只出现一次，探索轮计入所有指标；同一种子下四个阈值使用相同题目顺序。
+首个种子作为主实验，报告给出模型选择的整数次数；其余回放用于汇总均值和标准差。
 
-```powershell
-python -m bandit --input data_prep/output/run/result.csv --value-per-correct 0.01 0.03 0.1
-```
-
-## 准确率目标下降低成本
-
-固定的 V 无法直接对应一个准确率。`--target-accuracy τ` 为每个 τ 增加一个 `target-ucb[tau=…]` 策略
-（[target_ucb.py](target_ucb.py)），目标是在整次回放准确率不低于 τ 的前提下尽量降低费用：
+设 `mu_i` 为模型在全量数据上的准确率估计，`a*` 为满足 `mu_i >= mu0` 的最便宜模型：
 
 ```text
-score_m = KL-UCB(模型 m 的准确率) − 模型 m 的平均已知费用 / V
-答完一题后：log V += step × (τ − correct)
+cost_regret(t)    = sum_{s=1}^t max(0, c[chosen_s] - c[a*])
+quality_regret(t) = sum_{s=1}^t max(0, mu0 - mu[chosen_s])
 ```
 
-- 答错时 V 变大，策略偏向准确的模型。答对时 V 变小，策略偏向便宜的模型。
-  因此策略会在两个模型之间混合，而不是只收敛到一个模型。
-- 对 T 道题有恒等式：`准确率 = τ + ln(V_初始 / V_最终) / (step × T)`。
-  只要最终 V 不超过初始 V，这次回放就达到目标。初始 V 越大、step 越小，达标越稳，但多花的费用也越多。
-- 准确率上界使用 KL-UCB（[Garivier and Cappé, 2011](https://arxiv.org/abs/1102.2490)），不用 UCB1 的上界。
-  在 1000 题内，UCB1 的探索项过宽，即使只看准确率也只能达到约 87%，接近最佳模型的目标无法达到。
-- 费用不加探索项，只用已知费用的平均值。还没有已知费用的模型，按已知平均费用最高的模型估计。
-- `--target-initial-value`（默认 1 美元）和 `--target-step`（默认 0.3）调节上述取舍。
+这是论文第 2 页定义的经验版本，使用模型均值而非逐题 0/1 结果。全量准确率只用于事后评估，
+不会影响路由。成本 regret 单位为美元，质量 regret 单位为预期答对数缺口。
+没有可行模型时，成本 regret 为 `N/A`，质量 regret 仍然计算。
 
-报告另列“Accuracy targets”表：各次回放中达标的次数，以及 best mix 费用。
-best mix 是用全量数据算出的、平均准确率不低于 τ 的最便宜的固定随机模型混合，只作参照，不能部署。
-在线策略的费用高于 best mix 的部分，是探索和学习的代价。
-
-```powershell
-python -m bandit --input data_prep/output/run/result.csv --target-accuracy 0.84 0.86 0.88
-```
-
-UCB1 公式依据：[Auer et al., 2002](https://people.eecs.berkeley.edu/~russell/classes/cs294/s11/readings/Auer%2Bal%3A2002.pdf)。
-
-## 回答评分
-
-原始 CSV 没有 `correct` 列，必须先将回答转成奖励。脚本采用可审阅的确定性规则：
-
-- 优先取最后一个完整的 `<answer>...</answer>`，避免把推理中碰巧出现的正确答案算作回答。
-- 选择题解析选项字母；没有标签时，只接受独立选项或明确的 answer/option/choice 表述。
-  解析失败、空回答和请求错误计 0，不随机猜一个答案。`accounting_error` 不影响已有回答的评分。
-- 开放题支持标准答案中的备选答案列表，文本大小写与空白归一化，以及带单位数字、千位分隔符和科学计数法。
-  数字按 MMMU 常用规则保留两位小数后比较；文本使用词边界匹配。
-  不做符号运算、单位换算、语义同义判断。
-- 评分参考 [MMMU 官方评估代码](https://github.com/MMMU-Benchmark/MMMU/blob/main/mmmu/utils/eval_utils.py)，
-  但额外优先使用 answer 标签、不随机猜选项，文本边界规则也不同，因此**不是官方评估器的等价实现**。
-  两位小数规则可能误判很小的数值或精度要求高的答案；所有开放题和回退解析均标记 `needs_review=1`。
-
-自动评分适合先检查实验流程；正式报告前应人工审阅 `scored_results.csv` 中的标记项。
-可以提供部分或全部人工核验标签覆盖自动评分，不修改原始 CSV：
-
-```csv
-question_id,model,correct
-test_Accounting_100,anthropic/claude-haiku-5.5,1
-```
-
-```powershell
-python -m bandit --input data_prep/output/run/result.csv --labels reviewed_labels.csv
-```
-
-`--labels` 中 `correct` 必须为 `0` 或 `1`，重复键和原始数据不存在的键会报错。
-标签应在比较算法前独立确定，避免按实验结果反复调整评分标准。
+报告分别给出被选 CSV 记录的实际费用与固定成本合计。被选记录有缺失费用时，实际总额为
+`N/A`，同时保留已知费用下界和缺失条数；固定成本合计与成本 regret 仍使用 `c_i`。
+FT-UCB 不保证 1000 轮实际准确率达到阈值；乐观上界可能让便宜但不可行的模型长期被选中。
+重复回放的标准差仅反映同一数据上的顺序与随机性，不能视为对新题的置信区间。
 
 ## 输出
 
-默认输出到 `bandit/output/ucb1/`，再次使用同一目录会覆盖这些报告文件：
-
 | 文件 | 内容 |
 | --- | --- |
-| `scored_results.csv` | 原始字段、抽取答案、0/1 得分、评分来源、人工复核标记 |
-| `runs.csv` | 各次回放、各策略的准确率、已知费用、未知费用条数、延迟、regret、模型选择次数 |
-| `trace.csv` | 各 UCB 策略与随机路由每轮选择、奖励、累计准确率、累计已知费用、regret；可用于画学习曲线 |
-| `summary.json` | 均值与标准差、模型选择次数均值、输入文件哈希、评分统计 |
-| `report.md` | 可读的实验比较表和评估限制 |
+| `scored_results.csv` | 原始字段、评分、来源与复核标记 |
+| `trace.csv` | 每个阈值、种子、轮次的选择、候选集合、选择前统计、累计指标与两种 regret |
+| `runs.csv` | 每次回放的准确率、费用、缺失条数、两种 regret 与模型选择次数 |
+| `curves.csv` | 每个阈值、每轮 regret 的均值与标准差 |
+| `summary.json` | 固定成本、模型准确率、可行模型、汇总及输入文件哈希 |
+| `report.md` | 主实验指标、整数选择次数、重复实验汇总、公式与讨论 |
+| `regret.png` / `.pdf` | 两种累计 regret 曲线，均值 ± 标准差 |
+| `arm_selections.png` / `.pdf` | 主实验的模型选择次数图 |
 
-费用只累计被路由选中的 CSV 记录。缺失费用保留为未知，不自动当成 0；有缺失时，已知费用总和仅为下界。
-CSV 的费用和延迟不完整覆盖历史失败重试、排队等待等开销，不能视为真实部署成本与端到端延迟的精确预测。
+再次使用同一输出目录会覆盖同名文件。PNG/PDF 可用于幻灯片。
+
+算法边界、手算 regret、缺失费用及标签隔离的测试代码位于 `bandit/tests/`，需要时手动运行：
+
+```powershell
+python -m unittest discover -s bandit/tests
+```

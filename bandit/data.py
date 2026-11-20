@@ -11,7 +11,7 @@ from pathlib import Path
 
 REQUIRED_FIELDS = (
     "question_id", "subject", "question_type", "model", "raw_response",
-    "correct_answer", "cost", "latency", "error",
+    "correct_answer", "cost", "error",
 )
 ANSWER_TAG = re.compile(r"<answer\s*>(.*?)</answer\s*>", re.I | re.S)
 NUMBER = re.compile(r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+|\.\d+)(?:\.\d+)?(?:[eE][-+]?\d+)?")
@@ -24,7 +24,6 @@ class Observation:
     model: str
     correct: int
     cost: float | None
-    latency: float | None
 
 
 def normalize(text):
@@ -159,8 +158,7 @@ def load_data(path, expected_prompts=1000, labels_path=None):
         reviewed = key in labels
         correct = labels.get(key, correct)
         cost = optional_metric(row["cost"], "cost")
-        latency = optional_metric(row["latency"], "latency")
-        table.setdefault(key[0], {})[key[1]] = Observation(*key, correct, cost, latency)
+        table.setdefault(key[0], {})[key[1]] = Observation(*key, correct, cost)
         scored.append({
             **row, "extracted_answer": prediction, "extraction": extraction,
             "correct": correct, "score_source": "reviewed" if reviewed else "automatic",

@@ -1,5 +1,5 @@
 # LLM_Routing
 
-See the [data preparation guide](data_prep/README.md) for the 1000-question MMMU sample, raw answers from four models, and actual API usage and cost records.
+Offline routing experiments reuse an existing complete response CSV; collected data is not included in this branch.
 
-See the [UCB1 offline routing guide](bandit/README.md) to evaluate routing using the collected responses without further API calls.
+See the [bandit guide](bandit/README.md) for FT-UCB (paper Algorithm 6) at four feasibility thresholds, per-round routing logs, cost/quality regret, reports and plots. No model APIs are called.

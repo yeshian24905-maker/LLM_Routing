@@ -1,0 +1,2 @@
+# FT-UCB PNG/PDF plots.
+matplotlib>=3.6
