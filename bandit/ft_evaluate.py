@@ -52,7 +52,7 @@ def moments(values):
 
 
 def evaluate_ft(
-    table, models, thresholds=DEFAULT_THRESHOLDS, repeats=30, seed=42,
+    table, models, thresholds=DEFAULT_THRESHOLDS, repeats=1, seed=42,
     fixed_costs=None, empirical_costs=False,
 ):
     if not table or repeats < 1:
@@ -73,7 +73,8 @@ def evaluate_ft(
         optimal = feasible[0] if feasible else None
         scenario_runs, paths = [], []
         for run_seed in range(seed, seed + repeats):
-            order = sorted(table)
+            # load_data orders the table by the authoritative questions.jsonl list.
+            order = list(table)
             # Same seed gives the same prompt order at every threshold.
             random.Random(f"order:{run_seed}").shuffle(order)
             policy = FixedThresholdUCB(models, costs, threshold, seed=f"ft:{run_seed}")

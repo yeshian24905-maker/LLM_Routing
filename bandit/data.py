@@ -2,6 +2,8 @@
 
 import ast
 import csv
+import hashlib
+import json
 import math
 import re
 import unicodedata
@@ -131,7 +133,44 @@ def optional_metric(value, name):
     return result
 
 
-def load_data(path, expected_prompts=1000, labels_path=None):
+def load_questions(data_dir, expected_prompts=1000):
+    """Read the authoritative MMMU prompt list and verify its downloaded manifest."""
+    data_dir = Path(data_dir).resolve()
+    path = data_dir / "questions.jsonl"
+    raw = path.read_bytes()
+    manifest = json.loads((data_dir / "dataset_manifest.json").read_text(encoding="utf-8-sig"))
+    if manifest.get("questions_sha256") != hashlib.sha256(raw).hexdigest():
+        raise ValueError("questions.jsonl checksum does not match dataset_manifest.json")
+    questions = {}
+    for number, line in enumerate(raw.decode("utf-8-sig").splitlines(), 1):
+        if not line.strip():
+            continue
+        question = json.loads(line)
+        fields = ("question_id", "subject", "question_type", "question", "correct_answer")
+        if not isinstance(question, dict) or any(
+            not isinstance(question.get(field), str) or not question[field].strip() for field in fields
+        ):
+            raise ValueError(f"{path}: line {number}: incomplete question")
+        qid = question["question_id"]
+        if qid in questions:
+            raise ValueError(f"{path}: duplicate question_id: {qid}")
+        if question["question_type"] not in ("multiple-choice", "open"):
+            raise ValueError(f"{path}: unknown question_type for {qid}")
+        images = question.get("images", {})
+        if not isinstance(images, dict) or any(not isinstance(value, str) for value in images.values()):
+            raise ValueError(f"{path}: invalid images for {qid}")
+        for relative_path in images.values():
+            image_path = (data_dir / relative_path).resolve()
+            if not image_path.is_relative_to(data_dir) or not image_path.is_file():
+                raise ValueError(f"{qid}: missing or invalid image path: {relative_path}")
+        questions[qid] = question
+    if len(questions) != expected_prompts or manifest.get("question_count") != len(questions):
+        raise ValueError(f"Expected {expected_prompts} MMMU questions; found {len(questions)}")
+    return questions
+
+
+def load_data(path, questions, labels_path=None):
+    """Attach saved model outcomes to the MMMU questions, never create extra rounds."""
     labels = {}
     if labels_path is not None:
         for number, row in read_csv(labels_path, ("question_id", "model", "correct")):
@@ -140,7 +179,6 @@ def load_data(path, expected_prompts=1000, labels_path=None):
                 raise ValueError(f"{labels_path}: record {number}: duplicate pair or correct is not 0/1")
             labels[key] = int(row["correct"])
     table, scored, seen = {}, [], set()
-    metadata = {}
     for number, row in read_csv(path, REQUIRED_FIELDS):
         key = row["question_id"], row["model"]
         if not all(part.strip() for part in key) or not row["subject"].strip():
@@ -148,12 +186,11 @@ def load_data(path, expected_prompts=1000, labels_path=None):
         if key in seen:
             raise ValueError(f"{path}: duplicate (question_id, model): {key}")
         seen.add(key)
-        if row["question_type"] not in ("multiple-choice", "open"):
-            raise ValueError(f"{path}: unknown question_type: {row['question_type']!r}")
-        info = (row["subject"], row["question_type"], row["correct_answer"])
-        if key[0] in metadata and metadata[key[0]] != info:
-            raise ValueError(f"{path}: inconsistent subject/type/answer for {key[0]}")
-        metadata[key[0]] = info
+        question = questions.get(key[0])
+        if question is None:
+            raise ValueError(f"{path}: result refers to a question outside questions.jsonl: {key[0]}")
+        if any(row[field] != question[field] for field in ("subject", "question_type", "correct_answer")):
+            raise ValueError(f"{path}: result metadata does not match MMMU question {key[0]}")
         prediction, extraction, correct = grade(row)
         reviewed = key in labels
         correct = labels.get(key, correct)
@@ -166,14 +203,14 @@ def load_data(path, expected_prompts=1000, labels_path=None):
                 "answer_tag", "empty_response", "request_error",
             ))),
         })
-    if len(table) != expected_prompts:
-        raise ValueError(f"Expected {expected_prompts} distinct prompts; found {len(table)}")
+    if len(table) != len(questions):
+        raise ValueError(f"Expected results for {len(questions)} MMMU questions; found {len(table)}")
     models = sorted({model for observations in table.values() for model in observations})
-    if len(models) < 2:
-        raise ValueError("Routing needs at least two models")
+    if len(models) != 4:
+        raise ValueError("FT-UCB requires results from exactly four models")
     incomplete = [qid for qid, observations in table.items() if set(observations) != set(models)]
     if incomplete:
         raise ValueError(f"Missing model results for {len(incomplete)} prompts, e.g. {incomplete[:3]}")
     if labels.keys() - seen:
         raise ValueError(f"Reviewed labels refer to unknown pairs: {list(labels.keys() - seen)[:3]}")
-    return table, models, scored
+    return {qid: table[qid] for qid in questions}, models, scored

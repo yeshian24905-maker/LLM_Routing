@@ -7,3 +7,4 @@ __pycache__/
 /data_prep/output/
 /data_prep/.cache/
 /bandit/output/
+/mmmu_test_sample/

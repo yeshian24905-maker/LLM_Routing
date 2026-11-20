@@ -3,11 +3,16 @@
 Run explicitly with: python -m unittest discover -s bandit/tests
 """
 
+import csv
+import hashlib
+import json
 import math
 import random
+import tempfile
 import unittest
+from pathlib import Path
 
-from bandit.data import Observation
+from bandit.data import REQUIRED_FIELDS, Observation, load_data, load_questions
 from bandit.ft_evaluate import arm_statistics, evaluate_ft, resolve_costs
 from bandit.ft_report import make_ft_report
 from bandit.ft_ucb import FixedThresholdUCB
@@ -159,10 +164,73 @@ class FixedThresholdReplayTests(unittest.TestCase):
             fixture(), ARMS, [0.8], repeats=1, fixed_costs=COSTS,
         )
         summary.update(input_csv="fixture.csv", input_sha256="test", arm_costs_json="costs.json",
-                       arm_costs_sha256="test", scorer="test", grading={"needs_review": 0})
+                       arm_costs_sha256="test", questions_jsonl="questions.jsonl", questions_sha256="test",
+                       scorer="test", grading={"needs_review": 0})
         report = make_ft_report(summary, runs)
         for expected in ("5 | 1 | 1 | 1 | 8", "Quality regret", "given fixed costs", "regret.png"):
             self.assertIn(expected, report)
+
+
+class MMMUInputTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.questions = [
+            {"question_id": qid, "subject": "Math", "question_type": "multiple-choice",
+             "question": "Choose A.", "correct_answer": "A", "images": {}}
+            for qid in ("q2", "q1")
+        ]
+        raw = "".join(json.dumps(question) + "\n" for question in self.questions).encode()
+        (self.root / "questions.jsonl").write_bytes(raw)
+        (self.root / "dataset_manifest.json").write_text(json.dumps({
+            "questions_sha256": hashlib.sha256(raw).hexdigest(), "question_count": 2,
+        }), encoding="utf-8")
+        self.rows = [
+            {"question_id": question["question_id"], "subject": "Math", "question_type": "multiple-choice",
+             "model": arm, "raw_response": "<answer>A</answer>", "correct_answer": "A", "cost": "0.01", "error": ""}
+            for question in reversed(self.questions) for arm in ARMS
+        ]
+        self.path = self.root / "results.csv"
+        self.write_results()
+
+    def write_results(self):
+        with self.path.open("w", encoding="utf-8", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=REQUIRED_FIELDS)
+            writer.writeheader()
+            writer.writerows(self.rows)
+
+    def test_questions_determine_round_count_and_base_order(self):
+        questions = load_questions(self.root, expected_prompts=2)
+        table, models, scored = load_data(self.path, questions)
+        self.assertEqual(list(table), ["q2", "q1"])
+        self.assertEqual(len(table), 2)  # two prompts, not eight decision rounds
+        self.assertEqual(len(scored), 8)
+        self.assertEqual(set(models), set(ARMS))
+
+    def test_result_cannot_override_mmmu_ground_truth(self):
+        self.rows[0]["correct_answer"] = "B"
+        self.write_results()
+        with self.assertRaisesRegex(ValueError, "does not match MMMU"):
+            load_data(self.path, load_questions(self.root, 2))
+
+    def test_unknown_question_is_rejected(self):
+        self.rows[0]["question_id"] = "not-in-mmmu"
+        self.write_results()
+        with self.assertRaisesRegex(ValueError, "outside questions.jsonl"):
+            load_data(self.path, load_questions(self.root, 2))
+
+    def test_manifest_detects_changed_question_file(self):
+        with (self.root / "questions.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write("\n")
+        with self.assertRaisesRegex(ValueError, "checksum"):
+            load_questions(self.root, 2)
+
+    def test_missing_arm_outcome_is_rejected(self):
+        self.rows.pop()
+        self.write_results()
+        with self.assertRaisesRegex(ValueError, "Missing model results"):
+            load_data(self.path, load_questions(self.root, 2))
 
 
 if __name__ == "__main__":

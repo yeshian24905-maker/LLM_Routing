@@ -12,9 +12,12 @@ def make_ft_report(summary, runs):
     primary = [run for run in runs if run["seed"] == summary["primary_seed"]]
     lines = [
         "# FT-UCB offline routing experiment", "",
-        f"Input: `{summary['input_csv']}`; SHA-256: `{summary['input_sha256']}`.", "",
+        f"Questions: `{summary['questions_jsonl']}`; SHA-256: `{summary['questions_sha256']}`.", "",
+        f"Saved model outcomes: `{summary['input_csv']}`; SHA-256: `{summary['input_sha256']}`.", "",
         f"{summary['prompts']} prompts x {len(models)} arms; {summary['repeats']} shuffled replays. "
         f"The primary run uses seed {summary['primary_seed']}. No new model calls are made.", "",
+        f"Each threshold has {summary['prompts']} decision rounds, one per MMMU question. "
+        "Saved outcomes for four arms are a lookup/evaluation table, not extra decision rounds.", "",
         f"[Algorithm 6, Appendix H]({PAPER}#page=54): initialize each arm once in ascending "
         "fixed-cost order; then choose the cheapest arm whose empirical mean plus "
         "sqrt(2 ln(t) / n) reaches mu0. If no arm qualifies, sample uniformly. "
@@ -70,24 +73,25 @@ def make_ft_report(summary, runs):
             f"| {run['threshold']:.1%} | " + " | ".join(str(counts[arm]) for arm in models)
             + f" | {sum(counts.values())} |"
         )
-    lines.extend([
-        "", "![Primary-run arm selection counts](arm_selections.png)", "",
-        "## Repeated replays", "",
-        "| mu0 | Accuracy (mean +/- SD) | Known CSV cost (mean +/- SD), USD "
-        "| Cost regret (mean +/- SD), USD | Quality regret (mean +/- SD) | Runs meeting mu0 |",
-        "| --- | ---: | ---: | ---: | ---: | ---: |",
-    ])
-    for scenario in summary["scenarios"]:
-        values = scenario["metrics"]
-        accuracy = values["accuracy"]
-        cells = [f"{accuracy['mean']:.2%} +/- {accuracy['std']:.2%}"]
-        for field in ("known_cost_usd", "cost_regret_usd", "quality_regret"):
-            metric = values[field]
-            cells.append(f"{number(metric['mean'])} +/- {number(metric['std'])}")
-        lines.append(
-            f"| {scenario['threshold']:.1%} | " + " | ".join(cells)
-            + f" | {scenario['runs_meeting_threshold']}/{summary['repeats']} |"
-        )
+    lines.extend(["", "![Primary-run arm selection counts](arm_selections.png)", ""])
+    if summary["repeats"] > 1:
+        lines.extend([
+            "## Repeated replays", "",
+            "| mu0 | Accuracy (mean +/- SD) | Known CSV cost (mean +/- SD), USD "
+            "| Cost regret (mean +/- SD), USD | Quality regret (mean +/- SD) | Runs meeting mu0 |",
+            "| --- | ---: | ---: | ---: | ---: | ---: |",
+        ])
+        for scenario in summary["scenarios"]:
+            values = scenario["metrics"]
+            accuracy = values["accuracy"]
+            cells = [f"{accuracy['mean']:.2%} +/- {accuracy['std']:.2%}"]
+            for field in ("known_cost_usd", "cost_regret_usd", "quality_regret"):
+                metric = values[field]
+                cells.append(f"{number(metric['mean'])} +/- {number(metric['std'])}")
+            lines.append(
+                f"| {scenario['threshold']:.1%} | " + " | ".join(cells)
+                + f" | {scenario['runs_meeting_threshold']}/{summary['repeats']} |"
+            )
     lines.extend([
         "", "## Regret definitions", "",
         f"Following [Section 1.1]({PAPER}#page=2), let mu_i be the full-data accuracy "
@@ -109,8 +113,9 @@ def make_ft_report(summary, runs):
         f"Scorer: {summary['scorer']}. {summary['grading']['needs_review']} observations "
         "are flagged for manual review in scored_results.csv. Automatic scores and all "
         "quality comparisons remain provisional until reviewed labels are supplied.", "",
-        "Curves show replay means +/- sample SD on this finite dataset, approximating path "
-        "expectations. SD measures order/randomness sensitivity, not uncertainty on unseen prompts.", "",
+        "Curves show one sampled path at each threshold by default. With multiple replays, "
+        "they show means +/- sample SD, approximating path expectations. SD measures "
+        "order/randomness sensitivity, not uncertainty on unseen prompts.", "",
         "Full per-run counts and totals are in runs.csv; each decision is in trace.csv. "
         "Plots are exported as PNG/PDF for slides.", "",
     ])
@@ -135,10 +140,11 @@ def plot_ft(output_dir, summary, runs, curves):
                 axis.plot([], [], linestyle="none", label=f"{label} (infeasible; N/A)")
                 continue
             line, = axis.plot(t, means, label=label, linewidth=1.8)
-            axis.fill_between(
-                t, [max(0.0, m - sd) for m, sd in zip(means, sds)],
-                [m + sd for m, sd in zip(means, sds)], color=line.get_color(), alpha=0.13,
-            )
+            if summary["repeats"] > 1:
+                axis.fill_between(
+                    t, [max(0.0, m - sd) for m, sd in zip(means, sds)],
+                    [m + sd for m, sd in zip(means, sds)], color=line.get_color(), alpha=0.13,
+                )
     for axis, title, unit in zip(
         axes, ("Empirical cost regret", "Empirical quality regret"),
         ("Cumulative regret (USD)", "Cumulative expected-correct deficit"),
@@ -148,7 +154,8 @@ def plot_ft(output_dir, summary, runs, curves):
         axis.set_ylim(bottom=0)
         axis.grid(alpha=0.25)
         axis.legend(fontsize=8)
-    fig.suptitle(f"FT-UCB: mean +/- SD over {summary['repeats']} replays")
+    title = f"mean +/- SD over {summary['repeats']} replays" if summary["repeats"] > 1 else "one run per threshold"
+    fig.suptitle(f"FT-UCB: {title}")
     for extension in ("png", "pdf"):
         fig.savefig(output_dir / f"regret.{extension}", dpi=180)
     plt.close(fig)

@@ -1,4 +1,4 @@
-"""Run the FT-UCB experiment using local model responses."""
+"""Route the MMMU prompt list with FT-UCB, reusing its saved model outcomes."""
 
 import argparse
 import csv
@@ -6,7 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from .data import SCORER, load_data
+from .data import SCORER, load_data, load_questions
 from .ft_evaluate import DEFAULT_THRESHOLDS, evaluate_ft
 from .ft_report import make_ft_report, plot_ft
 
@@ -28,10 +28,12 @@ def file_hash(path):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Offline FT-UCB routing (paper Algorithm 6).")
-    parser.add_argument("--input", type=Path, required=True, help="Complete response CSV.")
+    parser.add_argument("--data-dir", type=Path, default=Path(__file__).resolve().parents[1] / "mmmu_test_sample",
+                        help="MMMU directory containing questions.jsonl, images and runs.")
+    parser.add_argument("--run", default="sequential", help="Saved run name under DATA_DIR/runs.")
     parser.add_argument("--output-dir", type=Path, default=Path("bandit/output/ft-ucb"))
     parser.add_argument("--expected-prompts", type=int, default=1000)
-    parser.add_argument("--repeats", type=int, default=30)
+    parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--labels", type=Path, help="Reviewed question_id,model,correct CSV (0/1).")
     parser.add_argument("--thresholds", type=float, nargs="+", default=DEFAULT_THRESHOLDS,
@@ -44,13 +46,24 @@ def main(argv=None):
     if args.expected_prompts < 1 or args.repeats < 1:
         parser.error("--expected-prompts and --repeats must be positive")
     try:
-        table, models, scored = load_data(args.input, args.expected_prompts, args.labels)
+        questions = load_questions(args.data_dir, args.expected_prompts)
+        runs_dir = (args.data_dir / "runs").resolve()
+        run_dir = (runs_dir / args.run).resolve()
+        if not run_dir.is_relative_to(runs_dir):
+            raise ValueError("--run must select a directory inside DATA_DIR/runs")
+        questions_path = args.data_dir / "questions.jsonl"
+        run_manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8-sig"))
+        if run_manifest.get("identity", {}).get("questions_sha256") != file_hash(questions_path):
+            raise ValueError("Saved model run was collected on a different questions.jsonl")
+        results_path = run_dir / "results.csv"
+        table, models, scored = load_data(results_path, questions, args.labels)
         fixed_costs = json.loads(args.arm_costs.read_text(encoding="utf-8-sig")) if args.arm_costs else None
         summary, runs, traces, curves = evaluate_ft(
             table, models, args.thresholds, args.repeats, args.seed, fixed_costs, args.empirical_costs,
         )
         summary.update(
-            input_csv=str(args.input.resolve()), input_sha256=file_hash(args.input),
+            questions_jsonl=str(questions_path.resolve()), questions_sha256=file_hash(questions_path),
+            input_csv=str(results_path), input_sha256=file_hash(results_path),
             arm_costs_json=str(args.arm_costs.resolve()) if args.arm_costs else None,
             arm_costs_sha256=file_hash(args.arm_costs) if args.arm_costs else None,
             labels_csv=str(args.labels.resolve()) if args.labels else None,
