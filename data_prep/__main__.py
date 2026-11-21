@@ -6,6 +6,7 @@ from pathlib import Path
 
 from filelock import FileLock
 
+from .additional import prepare_additional
 from .collector import api_client, collect_dataset, fetch_catalog, print_catalog
 from .common import (
     DEFAULT_CONFIG, DEFAULT_DATA_DIR, export_results, load_config, recover_journal,
@@ -38,6 +39,12 @@ def parser():
                           help="Questions to keep, split evenly across subjects, or 'all' (default: %(default)s)")
     download.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Sampling seed (default: %(default)s)")
     download.add_argument("--revision", default="main", help="Dataset branch, tag, or commit; resolved SHA is recorded")
+
+    additional = commands.add_parser("prepare-additional", help="Top up subject quotas using local cached parquet; no network")
+    additional.add_argument("--source-dir", type=Path, default=Path("mmmu_test_sample"))
+    additional.add_argument("--output-dir", type=Path, help="Default: SOURCE_DIR/additional_2000")
+    additional.add_argument("--target-per-subject", type=positive_int, default=100)
+    additional.add_argument("--seed", type=int, default=DEFAULT_SEED)
 
     check = commands.add_parser("check-models", help="Check model IDs, image support, parameters, and live prices")
     check.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
@@ -82,6 +89,14 @@ def main(argv=None):
                 arguments.output_dir, arguments.splits, arguments.subjects,
                 arguments.sample_size, arguments.seed, arguments.revision,
             )
+        elif arguments.command == "prepare-additional":
+            validation = prepare_additional(
+                arguments.source_dir, arguments.output_dir or arguments.source_dir / "additional_2000",
+                arguments.target_per_subject, arguments.seed,
+            )
+            print(f"Verified: {validation['source_questions']} original + "
+                  f"{validation['additional_questions']} new = {validation['combined_questions']} questions; "
+                  f"{validation['subjects']} subjects, zero overlapping IDs")
         elif arguments.command == "check-models":
             config = load_config(arguments.config)
             with api_client(config, require_key=False) as client:

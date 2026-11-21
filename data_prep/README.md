@@ -54,6 +54,41 @@ caffeinate -dims python -m data_prep run
 
 Defaults: data in `data_prep/output/mmmu_test_sample/`, full run in its `runs/default/`. Use `python -m data_prep <command> --help` for all options, for example `run --models <id> --limit N`, `run --workers-per-model N`, `download --seed N --sample-size N|all --splits dev validation test`.
 
+## Prepare 2000 additional questions without model requests
+
+To extend an existing 1000-question sample to 100 questions per subject (3000 total),
+prepare only the missing questions from the original pinned parquet cache:
+
+```powershell
+python -m data_prep prepare-additional --source-dir mmmu_test_sample --target-per-subject 100 --seed 20261121
+python -m data_prep run --data-dir mmmu_test_sample/additional_2000 --dry-run
+```
+
+The first command excludes every original question ID and identical prompt content, then selects `100 - original_count`
+new questions for each subject. For the existing sample, ten subjects receive 66 new
+questions and twenty receive 67, giving exactly 2000 new questions. The dataset revision
+and parquet checksums must match the original manifest; missing cache files cause an
+error, with no fallback downloads. Neither command sends network or model requests.
+
+Output is `mmmu_test_sample/additional_2000/`: `questions.jsonl`, `images/`,
+`dataset_manifest.json`, and `validation.json` with ID overlap, image verification and
+the original/additional/combined counts for each subject. Identical prompt content
+(subject, question text, options and image hashes) is also excluded within the new batch.
+The original questions and
+all existing collection records stay unchanged. Repeating the preparation command with
+the same settings revalidates and reuses this output; it does not add another batch.
+All this data remains under the ignored `mmmu_test_sample/` directory.
+
+Only after preparation and validation, a separate paid collection can use the existing
+four-model config and a new run directory:
+
+```powershell
+python -m data_prep run --data-dir mmmu_test_sample/additional_2000 --output-dir mmmu_test_sample/additional_2000/runs/sequential --requests-per-minute 15
+```
+
+This collects 8000 new model-question outcomes. It does not merge the two batches or
+replace the original run; preparation alone creates no new model responses.
+
 ## Dataset
 
 - **Source:** MMMU `test` split (10,500 questions, all with released answers), pinned to the resolved Hugging Face commit recorded in `dataset_manifest.json`.

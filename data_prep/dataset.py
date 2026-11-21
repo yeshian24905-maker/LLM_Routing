@@ -161,7 +161,15 @@ def prepare_image(data):
     return encoded, ".jpg" if output_format == "JPEG" else ".png", info
 
 
-def normalize_row(row, subject, split, output_dir):
+def question_fingerprint(question):
+    """Identify identical prompt content independently of row ID and ground truth."""
+    return json_dumps([
+        question["subject"], question["question_type"], question["question"],
+        question["options"], sorted(question["image_sha256"].items()),
+    ])
+
+
+def normalize_row(row, subject, split, output_dir, *, excluded_content=None):
     """Validate one parquet row and write its images; raise ValueError for unusable rows."""
     prepared = {}
     for index in range(1, 8):
@@ -191,11 +199,15 @@ def normalize_row(row, subject, split, output_dir):
     }
     # Validate IDs, labels, and references before writing any files.
     validate_question(question)
+    question["image_sha256"] = {
+        index: hashlib.sha256(data).hexdigest() for index, (data, _, _) in prepared.items()
+    }
+    if excluded_content is not None and question_fingerprint(question) in excluded_content:
+        raise ValueError("Duplicate question content")
     for index, (data, _, _) in prepared.items():
         target = Path(output_dir) / question["images"][index]
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
-        question["image_sha256"][index] = hashlib.sha256(data).hexdigest()
     return question
 
 
