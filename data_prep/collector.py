@@ -8,6 +8,7 @@ import os
 import random
 import threading
 import time
+from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -20,6 +21,7 @@ from .common import (
     load_config, nonnegative_number, read_json, recover_journal, request_parameters,
     select_models, sha256_file, utc_now, write_json,
 )
+from .concurrency import AutoConcurrency
 from .dataset import build_messages, load_questions
 
 
@@ -30,7 +32,7 @@ MAX_RETRY_DELAY = 120
 
 
 class RequestPacer:
-    """Space every POST attempt across all workers serving the same model."""
+    """Space every POST attempt across all workers and models sharing one API key."""
 
     def __init__(self, requests_per_minute):
         self.interval = 60.0 / requests_per_minute
@@ -364,6 +366,12 @@ def collect_dataset(
     data_dir, output_dir, config_path, model_ids=None, limit=None,
     dry_run=False, retry_errors=False, workers_per_model=None, requests_per_minute=None,
 ):
+    """
+    requests_per_minute: limit on POST attempts across all models, since providers rate-limit
+        per API key. Without workers_per_model, concurrency then follows the measured response
+        time (AutoConcurrency).
+    workers_per_model: fixed number of concurrent requests per model; default from config.
+    """
     data_dir, output_dir = Path(data_dir).resolve(), Path(output_dir).resolve()
     config = load_config(config_path)
     models = select_models(config, model_ids)
@@ -372,6 +380,7 @@ def collect_dataset(
         raise ValueError("workers_per_model must be positive")
     if requests_per_minute is not None and (type(requests_per_minute) is not int or requests_per_minute <= 0):
         raise ValueError("requests_per_minute must be a positive integer")
+    auto = AutoConcurrency(requests_per_minute) if requests_per_minute and not workers_per_model else None
     questions = load_questions(data_dir, limit)
     print(f"Selected {len(questions)} questions x {len(models)} models = {len(questions) * len(models)} pairs")
     if dry_run:
@@ -420,10 +429,16 @@ def collect_dataset(
             print_catalog(snapshot)
             snapshot_name = "catalog_" + utc_now().replace(":", "-") + ".json"
             write_json(output_dir / "catalogs" / snapshot_name, snapshot)
-            print(f"Sending with {workers} concurrent requests per model ({workers * len(models)} total)", flush=True)
-            pacers = {model["id"]: RequestPacer(requests_per_minute) for model in models} if requests_per_minute else {}
+            pacer = RequestPacer(requests_per_minute) if requests_per_minute else None
             if requests_per_minute:
-                print(f"Pacing all POST attempts at no more than {requests_per_minute} per minute per model", flush=True)
+                print(f"Pacing all POST attempts at no more than {requests_per_minute} per minute across all models",
+                      flush=True)
+            if auto:
+                print(f"Concurrency follows the measured response time (at most {auto.limit} requests in flight)",
+                      flush=True)
+            else:
+                print(f"Sending with {workers} concurrent requests per model ({workers * len(models)} total)",
+                      flush=True)
 
             stop = threading.Event()
             counters = {"requested": 0, "errors": 0, "moderation_refusals": 0, "cost": 0.0, "announced": False}
@@ -432,8 +447,7 @@ def collect_dataset(
             def task(question, model):
                 if stop.is_set():
                     return None
-                attempt = collect_one(client, question, model, build_messages(question, data_dir), config, stop,
-                                      pacers.get(model["id"]))
+                attempt = collect_one(client, question, model, build_messages(question, data_dir), config, stop, pacer)
                 if should_stop(attempt):
                     # Set in the worker so no other worker starts a new request first.
                     stop.set()
@@ -462,19 +476,49 @@ def collect_dataset(
                     stop.set()
                     print(f"Stopping on authentication/credit/access error: {row['error']}", flush=True)
 
-            executors = {
-                model["id"]: ThreadPoolExecutor(max_workers=workers, thread_name_prefix=model["id"].replace("/", "_"))
-                for model in models
-            }
-            outstanding = {executors[model["id"]].submit(task, question, model) for question, model in pending}
+            # Pairs are handed to workers only when there is room, so the automatic target
+            # can change during the run; models take turns so all of them make progress.
+            queues = {model["id"]: deque() for model in models}
+            for question, model in pending:
+                queues[model["id"]].append((question, model))
+            in_flight = dict.fromkeys(queues, 0)
+            outstanding = {}
+            executor = ThreadPoolExecutor(max_workers=auto.limit if auto else workers * len(models))
+            shown_target = [None]
+
+            def has_room(identifier):
+                if auto is None:
+                    return in_flight[identifier] < workers
+                return sum(in_flight.values()) < auto.target()
+
+            def fill():
+                submitted = True
+                while submitted and not stop.is_set():
+                    submitted = False
+                    for identifier, queue in queues.items():
+                        if queue and has_room(identifier):
+                            question, model = queue.popleft()
+                            outstanding[executor.submit(task, question, model)] = identifier
+                            in_flight[identifier] += 1
+                            submitted = True
+                if auto and auto.target() != shown_target[0]:
+                    shown_target[0] = auto.target()
+                    print(f"Concurrency: {shown_target[0]} requests in flight "
+                          f"(mean request time {auto.mean_seconds():.1f} s)", flush=True)
+
             try:
+                fill()
                 while outstanding:
                     finished, _ = wait(outstanding, return_when=FIRST_COMPLETED)
                     for future in finished:
-                        outstanding.discard(future)
+                        in_flight[outstanding.pop(future)] -= 1
                         attempt = future.result()
                         if attempt is not None:
                             record(attempt)
+                            if auto:
+                                # Time the worker spent on HTTP, not waiting for a pacer slot.
+                                auto.observe(sum(entry["latency"] for entry in attempt["transport_attempts"]))
+                    fill()
             except BaseException:
                 # Requests already sent may be billed: record them before re-raising.
                 stop.set()
@@ -492,8 +536,7 @@ def collect_dataset(
                 raise
             finally:
                 stop.set()
-                for executor in executors.values():
-                    executor.shutdown(wait=False, cancel_futures=True)
+                executor.shutdown(wait=False, cancel_futures=True)
                 # Derive exports from the durable journal, also after Ctrl+C.
                 if journal_path.exists():
                     export_results(output_dir)

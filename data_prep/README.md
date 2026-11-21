@@ -75,12 +75,14 @@ Defaults: data in `data_prep/output/mmmu_test_sample/`, full run in its `runs/de
 
 ## Rate-Limited Accounts
 
-Concurrency and requests per minute are different limits. Use `--requests-per-minute` to pace every POST attempt, including retries, across all workers for each selected model. On 429 errors, retries also honor `Retry-After` or `X-RateLimit-Reset`, including headers embedded in the error metadata.
+Concurrency and requests per minute are different limits. Use `--requests-per-minute` to pace every POST attempt, including retries, across all selected models: providers count requests per API key, not per model. On 429 errors, retries also honor `Retry-After` or `X-RateLimit-Reset`, including headers embedded in the error metadata, and the cooldown applies to all models.
 
-For an account limited to 20 requests per minute, run at 15 per minute with one worker. To repair only API failures among the first 110 questions and refresh the pilot report:
+With `--requests-per-minute` and no `--workers-per-model`, the number of requests in flight follows the measured response time: requests per second x mean seconds per request (last 20 requests), plus one, at most 32. A single worker would otherwise cap the rate at 60 / response time, for example 4 per minute when a request takes 15 s. The pacer still limits how often requests start, so extra workers cannot exceed the rate. The current value is printed whenever it changes. `--workers-per-model N` sets a fixed number per model instead, for providers that also limit concurrent requests.
+
+For an account limited to 20 requests per minute, run at 15 per minute. To repair only API failures among the first 110 questions and refresh the pilot report:
 
 ```powershell
-python -m data_prep pilot --model openai/gpt-5.6-luna --n 110 --output-dir data_prep/output/mmmu_test_sample/runs/sequential --retry-errors --requests-per-minute 15 --workers-per-model 1
+python -m data_prep pilot --model openai/gpt-5.6-luna --n 110 --output-dir data_prep/output/mmmu_test_sample/runs/sequential --retry-errors --requests-per-minute 15
 ```
 
 Keep the original data directory and output directory. Existing responses are skipped; `--retry-errors` only selects API-error rows without captured response text. An absent `finish_reason` after HTTP 429 means no completion was received. To continue through all 1000 questions, use the same command with `--n 1000`. Pacing and worker options do not change the experiment identity, so the existing journal can be resumed.

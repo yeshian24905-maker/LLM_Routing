@@ -25,6 +25,7 @@ from data_prep.__main__ import main
 from data_prep.collector import (
     RequestPacer, collect_dataset, collect_one, fetch_catalog, post_with_retries, reported_metrics, retry_delay,
 )
+from data_prep.concurrency import AutoConcurrency
 from data_prep.common import (
     DEFAULT_CONFIG, FIELDS, append_attempt, latest_records, latest_results, load_config, read_json, read_jsonl,
     recover_journal, request_costs, sha256_file, write_json, write_jsonl,
@@ -473,6 +474,52 @@ class PacingTests(TemporaryWorkspace):
         response = httpx.Response(429, headers={"X-RateLimit-Reset": "1800000060"})
         with patch("data_prep.collector.time.time", return_value=1800000000):
             self.assertEqual(retry_delay(1, response), 61)
+
+    def test_auto_concurrency_follows_response_time_within_its_limit(self):
+        auto = AutoConcurrency(15, limit=10, initial_seconds=30)
+        self.assertEqual(auto.target(), 9)
+        for seconds in (10, 30):
+            auto.observe(seconds)
+        self.assertEqual(auto.target(), 6)
+        auto.observe(1000)
+        self.assertEqual(auto.target(), 10)
+        self.assertEqual(AutoConcurrency(1, initial_seconds=0.1).target(), 2)
+
+    def test_one_pacer_serves_all_models(self):
+        self.prepare(count=2)
+        handler = lambda request: httpx.Response(
+            200, json=catalog_entries(self.identifiers) if request.method == "GET" else completion())
+        with self.run_api(handler), redirect_stdout(StringIO()), \
+                patch("data_prep.collector.RequestPacer.wait", autospec=True, return_value=True) as paced:
+            result = collect_dataset(self.data_dir, self.root / "run", self.config_path, requests_per_minute=15)
+        self.assertEqual(result["requested"], 8)
+        self.assertEqual(paced.call_count, 8)
+        self.assertEqual(len({id(call.args[0]) for call in paced.call_args_list}), 1)
+
+    def test_automatic_concurrency_overlaps_requests_and_adapts(self):
+        self.prepare(count=6)
+        lock, active, peak = threading.Lock(), [0], [0]
+
+        def handler(request):
+            if request.method == "GET":
+                return httpx.Response(200, json=catalog_entries(self.identifiers))
+            with lock:
+                active[0] += 1
+                peak[0] = max(peak[0], active[0])
+            threading.Event().wait(0.05)  # time.sleep is patched for the retry logic
+            with lock:
+                active[0] -= 1
+            return httpx.Response(200, json=completion(id=f"gen-{uuid.uuid4()}"))
+
+        output = StringIO()
+        with self.run_api(handler), redirect_stdout(output), \
+                patch("data_prep.collector.RequestPacer.wait", return_value=True):
+            result = collect_dataset(self.data_dir, self.root / "run", self.config_path,
+                                     model_ids=self.identifiers[:1], requests_per_minute=60)
+        self.assertEqual((result["requested"], result["errors"]), (6, 0))
+        self.assertGreater(peak[0], 1)
+        # About 0.05 s per request at one request per second needs only 2 in flight.
+        self.assertIn("Concurrency: 2 requests in flight", output.getvalue())
 
     def test_stop_during_backoff_prevents_another_request(self):
         calls = []

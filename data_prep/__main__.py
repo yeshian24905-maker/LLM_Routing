@@ -53,8 +53,10 @@ def parser():
     run.add_argument("--dry-run", action="store_true", help="Validate inputs and prompts offline; make no API calls")
     run.add_argument("--retry-errors", action="store_true",
                      help="Re-send pairs whose request failed without a model response (api_error rows)")
-    run.add_argument("--workers-per-model", type=positive_int, help="Concurrent requests per model (default: config)")
-    run.add_argument("--requests-per-minute", type=positive_int, help="Maximum POST attempts per minute per model, including retries")
+    run.add_argument("--workers-per-model", type=positive_int,
+                     help="Fixed concurrent requests per model (default: config, or automatic with --requests-per-minute)")
+    run.add_argument("--requests-per-minute", type=positive_int,
+                     help="Maximum POST attempts per minute across all models, including retries")
 
     pilot = commands.add_parser("pilot", help="Small paid trial on one model, with a report for manual review")
     pilot.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
@@ -62,7 +64,8 @@ def parser():
     pilot.add_argument("--model", help="Model ID from config.json (default: cheapest by live catalog price)")
     pilot.add_argument("--n", type=positive_int, default=10, help="Number of questions (default: %(default)s)")
     pilot.add_argument("--output-dir", type=Path, help="Default: DATA_DIR/runs/pilot_<model>_<n>")
-    pilot.add_argument("--workers-per-model", type=positive_int)
+    pilot.add_argument("--workers-per-model", type=positive_int,
+                       help="Fixed concurrent requests (default: config, or automatic with --requests-per-minute)")
     pilot.add_argument("--retry-errors", action="store_true", help="Retry recorded API failures with no response text")
     pilot.add_argument("--requests-per-minute", type=positive_int, help="Maximum POST attempts per minute, including retries")
 
