@@ -1,22 +1,38 @@
 # FT-UCB 离线路由实验
 
 实现论文 [Appendix H, Algorithm 6](https://users.ece.cmu.edu/~oyagan/Conferences/ICLR2025.pdf#page=54)，
-以 `mmmu_test_sample/questions.jsonl` 中的 **1000 道原始题目**为决策轮次，
-每道题先选一个模型，再读取 `mmmu_test_sample/runs/sequential/results.csv` 中该题该模型的已有回答。
+以当前 `result.csv` 中的 **3000 道题、4 个模型（12000 条已有回答）**做离线回放，
+每道题先选一个模型，再读取该题该模型的已有回答；每个阈值独立运行 3000 轮。
 不调用模型 API。四个阈值为 **89%、85%、80%、82.5%**。
 需要 Python 3.10+ 和 Matplotlib。
 
 ## 使用
 
-默认读取项目根目录的 `mmmu_test_sample/`，无需指定独立 CSV 文件：
+使用当前的完整 CSV，并复用其中已经归档、可核对的评分：
+
+```powershell
+python -m bandit --results-csv result.csv --scores-csv bandit/output/ft-ucb/scored_results.csv --expected-prompts 3000 --empirical-costs --repeats 1 --seed 42 --output-dir bandit/output/ft-ucb-verified
+```
+
+该模式从 `result.csv` 核对归档子集的每个原始字段，仅允许换行符差异，保留原来的评分和人工复核标记。
+不重新下载题目、不调用模型 API。输出目录必须与归档评分输入分开。
+**题目集合由完整的 `result.csv` 决定，不会被旧的 1000 题归档缩减。**
+其余 2000 道题按 CSV 标准答案自动评分；开放题和无法识别选项的回答保留人工复核标记。
+`--scores-csv` 可省略，此时全部回答重新评分；原 CSV 不含选项文本，数字/文本形式的选择题答案无法映射时计错并标记复核。
+`--expected-prompts` 是可选的题数校验，CSV 模式省略时使用全部题目。
+
+`mu0` 是每一轮构造候选集合 `UCB >= mu0` 时使用的固定输入阈值。
+最终正确与否由数据集的标准答案决定；输出中的最终准确率是否达到 `mu0` 仅为描述性统计，不参与选臂。
+
+原始 MMMU 文件夹模式也保留；未指定 `--results-csv` 时默认读取项目根目录的 `mmmu_test_sample/`：
 
 ```powershell
 python -m pip install -r bandit/requirements.txt
 python -m bandit --empirical-costs
 ```
 
-默认每个阈值只做 **一次 1000 轮实验**，每轮只选择一个模型，种子 42，输出到
-`bandit/output/ft-ucb/`。四个阈值是四次独立的 1000 轮实验。
+默认每个阈值只做一次实验，每轮只选择一个模型，种子 42。上述完整 CSV 命令是四次独立的 **3000 轮实验**。
+原始文件夹模式的默认题数仍为 1000，默认输出到 `bandit/output/ft-ucb/`；当前 CSV 命令另外输出到 `bandit/output/ft-ucb-verified/`。
 `--repeats 30` 可增加重复回放；`--seed`、`--output-dir`、`--thresholds` 可覆盖默认设置。
 数据位置变化时使用 `--data-dir <目录>`；`--run <名称>` 选择该目录 `runs/` 中的其他采集批次。
 
@@ -50,8 +66,8 @@ CSV 必须包含：
 question_id,subject,question_type,model,raw_response,correct_answer,cost,error
 ```
 
-每题每个模型恰好一条已有记录，共 4000 条查询记录；**它们不是 4000 个决策轮次**。
-每个阈值始终只按题目清单处理 1000 轮，每轮只用所选模型的结果更新 UCB。
+每题每个模型恰好一条已有记录；当前 CSV 共 12000 条回答记录，**它们不是 12000 个决策轮次**。
+当前每个阈值只处理 3000 轮，每轮只用所选模型的结果更新 UCB。
 加载器拒绝重复记录和无效费用。其他题量可用 `--expected-prompts N`。
 `question_type` 为 `multiple-choice` 或 `open`。
 
@@ -92,14 +108,14 @@ quality_regret(t) = sum_{s=1}^t max(0, mu0 - mu[chosen_s])
 
 报告分别给出被选 CSV 记录的实际费用与固定成本合计。被选记录有缺失费用时，实际总额为
 `N/A`，同时保留已知费用下界和缺失条数；固定成本合计与成本 regret 仍使用 `c_i`。
-FT-UCB 不保证 1000 轮实际准确率达到阈值；乐观上界可能让便宜但不可行的模型长期被选中。
+FT-UCB 不保证有限轮次（包括当前的 3000 轮）的实际准确率达到阈值；乐观上界可能让便宜但不可行的模型长期被选中。
 重复回放的标准差仅反映同一数据上的顺序与随机性，不能视为对新题的置信区间。
 
 ## 输出
 
 | 文件 | 内容 |
 | --- | --- |
-| `scored_results.csv` | 4000 条已有模型回答的评分，供事后比较和复核；不是路由决策记录 |
+| `scored_results.csv` | 当前 12000 条已有模型回答的评分，供事后比较和复核；不是路由决策记录 |
 | `trace.csv` | 每个阈值、种子、轮次的选择、候选集合、选择前统计、累计指标与两种 regret |
 | `runs.csv` | 每次回放的准确率、费用、缺失条数、两种 regret 与模型选择次数 |
 | `curves.csv` | 每个阈值、每轮 regret 的均值与标准差 |
@@ -108,8 +124,8 @@ FT-UCB 不保证 1000 轮实际准确率达到阈值；乐观上界可能让便�
 | `regret.png` / `.pdf` | 两种累计 regret 曲线，均值 ± 标准差 |
 | `arm_selections.png` / `.pdf` | 主实验的模型选择次数图 |
 
-默认 `runs.csv` 为 4 条汇总、`trace.csv` 为 4 × 1000 条决策记录、`curves.csv` 为 4 × 1000 条曲线记录。
-每个阈值的模型选择次数之和为 1000。
+当前 CSV 命令的 `runs.csv` 为 4 条汇总、`trace.csv` 为 4 × 3000 条决策记录、`curves.csv` 为 4 × 3000 条曲线记录。
+每个阈值的模型选择次数之和为 3000。
 
 再次使用同一输出目录会覆盖同名文件。PNG/PDF 可用于幻灯片。
 `bandit/output/ft-ucb/` 中的正式结果随代码提交到 GitHub；其他实验输出目录仍被忽略。

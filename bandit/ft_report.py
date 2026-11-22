@@ -12,7 +12,10 @@ def make_ft_report(summary, runs):
     primary = [run for run in runs if run["seed"] == summary["primary_seed"]]
     lines = [
         "# FT-UCB offline routing experiment", "",
-        f"Questions: `{summary['questions_jsonl']}`; SHA-256: `{summary['questions_sha256']}`.", "",
+        (f"Questions: `{summary['questions_jsonl']}`; SHA-256: `{summary['questions_sha256']}`."
+         if summary.get("questions_jsonl") else
+         "Question set: all distinct question IDs in the supplied raw results CSV. "
+         "An optional score archive supplies labels only; it never reduces the question set."), "",
         f"Saved model outcomes: `{summary['input_csv']}`; SHA-256: `{summary['input_sha256']}`.", "",
         f"{summary['prompts']} prompts x {len(models)} arms; {summary['repeats']} shuffled replays. "
         f"The primary run uses seed {summary['primary_seed']}. No new model calls are made.", "",
@@ -24,8 +27,19 @@ def make_ft_report(summary, runs):
         "The bound is not clipped to 1. Cost ties use model name order.", "",
         "Only the selected arm's outcome updates the policy. Each prompt occurs once per replay "
         "with immediate labeled feedback; thresholds share prompt order for each seed.", "",
+        "mu0 is an input to the UCB candidate-set decision at every round, not an answer label or "
+        "a final accuracy cutoff. Answers are compared with the supplied dataset's reference answers. "
+        "Any final accuracy >= mu0 field is a descriptive diagnostic only; it never controls routing.", "",
         f"Fixed costs used by the policy: **{summary['cost_source']}**.", "",
     ]
+    if summary.get("scores_csv"):
+        lines.extend([
+            f"Verified archived labels: `{summary['scores_csv']}`; SHA-256: `{summary['scores_sha256']}`. "
+            f"Reused {summary['grading']['archived_rows_reused']} labels after matching every original raw field "
+            "(only line endings may differ). Original review flags are retained. "
+            f"The other {summary['grading']['raw_csv_rows_scored']} responses are scored from the supplied CSV. "
+            "Numerical/text-only choices cannot be resolved when the raw CSV lacks option text.", "",
+        ])
     if summary["cost_source"] != "given fixed costs":
         lines.extend([
             "Costs are calibrated from all known CSV costs, excluding missing entries, and held fixed. "
@@ -106,7 +120,7 @@ def make_ft_report(summary, runs):
         "An infeasible threshold has cost regret N/A; quality regret remains defined.", "",
         "![Cumulative empirical cost and quality regrets](regret.png)", "",
         "## Discussion and limitations", "",
-        "FT-UCB need not reach mu0 in 1000 rounds: optimism can keep cheap infeasible arms "
+        f"FT-UCB need not reach mu0 in {summary['prompts']} rounds: optimism can keep cheap infeasible arms "
         "in the candidate set. Small cost regret alone does not establish quality feasibility.", "",
         "Actual costs sum selected CSV entries. With missing costs, the total is N/A and the "
         "known sum is a lower bound. Fixed-cost totals/regret use c_i, not per-prompt token costs.", "",

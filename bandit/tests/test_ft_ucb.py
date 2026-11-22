@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from bandit.data import REQUIRED_FIELDS, Observation, grade, load_data, load_questions
+from bandit.data import REQUIRED_FIELDS, Observation, grade, load_csv_replay, load_data, load_questions
 from bandit.ft_evaluate import arm_statistics, evaluate_ft, resolve_costs
 from bandit.ft_report import make_ft_report
 from bandit.ft_ucb import FixedThresholdUCB
@@ -67,6 +67,27 @@ class FixedThresholdPolicyTests(unittest.TestCase):
         policy.update("cheap", 1)
         self.assertEqual(policy.counts, dict(zip(ARMS, (1, 0, 0, 0))))
         self.assertEqual(policy.successes, dict(zip(ARMS, (1, 0, 0, 0))))
+
+    def test_mu0_changes_the_candidate_set_before_any_outcome_is_observed(self):
+        policies = [FixedThresholdUCB(ARMS, COSTS, mu) for mu in (0.85, 0.89)]
+        for policy in policies:
+            policy.counts = dict.fromkeys(ARMS, 1000)
+            policy.successes = dict(zip(ARMS, (740, 800, 850, 900)))
+        # cheap's UCB is about .869: eligible for .85, excluded for .89.
+        self.assertEqual(policies[0].select(), "cheap")
+        self.assertEqual(policies[1].select(), "mid")
+        self.assertIn("cheap", policies[0].last_decision["candidates"])
+        self.assertNotIn("cheap", policies[1].last_decision["candidates"])
+        self.assertEqual(policies[0].counts, policies[1].counts)
+        self.assertEqual(policies[0].successes, policies[1].successes)
+
+    def test_ucb_equal_to_mu0_is_included(self):
+        boundary = .74 + math.sqrt(2 * math.log(4001) / 1000)
+        policy = FixedThresholdUCB(ARMS, COSTS, boundary)
+        policy.counts = dict.fromkeys(ARMS, 1000)
+        policy.successes = dict(zip(ARMS, (740, 800, 850, 900)))
+        self.assertEqual(policy.select(), "cheap")
+        self.assertIn("cheap", policy.last_decision["candidates"])
 
     def test_invalid_costs_and_thresholds(self):
         for costs in ({"cheap": 1}, {**COSTS, "cheap": -1}, {**COSTS, "cheap": math.nan}):
@@ -263,6 +284,89 @@ class ChoiceScoringTests(unittest.TestCase):
 
     def test_reasoning_outside_answer_tag_cannot_rescue_bad_answer(self):
         self.assertEqual(self.score("<answer>no match</answer> Reasoning mentions option B.")[2], 0)
+
+
+class ArchivedReplayInputTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.raw_path = self.root / "result.csv"
+        self.scores_path = self.root / "archived.csv"
+        self.rows = [
+            {"question_id": qid, "subject": "Math", "question_type": "multiple-choice",
+             "model": arm, "raw_response": "<answer>First</answer>\nExplanation.",
+             "correct_answer": "A", "cost": "0.01", "error": ""}
+            for qid in ("q2", "q1", "q3") for arm in ARMS
+        ]
+        self.archived = [dict(row, correct="1", extracted_answer="A", extraction="answer_tag",
+                              score_source="automatic", needs_review="1") for row in self.rows[:8]]
+        self.write_csv(self.raw_path, self.rows)
+        self.write_csv(self.scores_path, self.archived)
+
+    def write_csv(self, path, rows):
+        with path.open("w", encoding="utf-8", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+
+    def test_partial_archive_does_not_drop_any_raw_questions(self):
+        table, models, scored = load_csv_replay(self.raw_path, self.scores_path, 3)
+        self.assertEqual(list(table), ["q2", "q1", "q3"])
+        self.assertEqual(set(models), set(ARMS))
+        self.assertEqual(len(scored), 12)
+        self.assertEqual(table["q2"]["cheap"].correct, 1)
+        self.assertEqual(table["q3"]["cheap"].correct, 0)
+        self.assertEqual(grade(self.rows[0])[2], 0)  # cannot map First without options
+        self.assertTrue(all(row["needs_review"] == 1 for row in scored))
+        self.assertTrue(all(row["score_source"] == "automatic" for row in scored))
+        self.assertEqual(sum(row["label_origin"] == "verified_archive" for row in scored), 8)
+
+    def test_csv_without_archive_uses_all_questions(self):
+        table, _, scored = load_csv_replay(self.raw_path)
+        self.assertEqual(len(table), 3)
+        self.assertEqual(len(scored), 12)
+        self.assertTrue(all(row["correct"] == 0 for row in scored))
+        self.assertTrue(all(row["label_origin"] == "raw_csv" for row in scored))
+
+    def test_inconsistent_raw_reference_answer_is_rejected(self):
+        self.rows[-1]["correct_answer"] = "B"
+        self.write_csv(self.raw_path, self.rows)
+        with self.assertRaisesRegex(ValueError, "Inconsistent question metadata"):
+            load_csv_replay(self.raw_path)
+
+    def test_duplicate_raw_pair_is_rejected(self):
+        self.rows.append(dict(self.rows[0]))
+        self.write_csv(self.raw_path, self.rows)
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            load_csv_replay(self.raw_path)
+
+    def test_mismatched_raw_outcome_is_rejected(self):
+        self.archived[0]["raw_response"] = "<answer>B</answer>"
+        self.write_csv(self.scores_path, self.archived)
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            load_csv_replay(self.raw_path, self.scores_path, 3)
+
+    def test_line_ending_only_change_is_allowed(self):
+        self.archived[0]["raw_response"] = self.archived[0]["raw_response"].replace("\n", "\r\n")
+        self.write_csv(self.scores_path, self.archived)
+        self.assertEqual(len(load_csv_replay(self.raw_path, self.scores_path, 3)[0]), 3)
+
+    def test_duplicate_archived_pair_is_rejected(self):
+        self.archived.append(dict(self.archived[0]))
+        self.write_csv(self.scores_path, self.archived)
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            load_csv_replay(self.raw_path, self.scores_path, 3)
+
+    def test_missing_model_outcome_is_rejected(self):
+        self.rows.pop()
+        self.write_csv(self.raw_path, self.rows)
+        with self.assertRaisesRegex(ValueError, "four model outcomes"):
+            load_csv_replay(self.raw_path, expected_prompts=3)
+
+    def test_expected_question_count_is_enforced(self):
+        with self.assertRaisesRegex(ValueError, "Expected 4 CSV questions"):
+            load_csv_replay(self.raw_path, self.scores_path, 4)
 
 
 if __name__ == "__main__":

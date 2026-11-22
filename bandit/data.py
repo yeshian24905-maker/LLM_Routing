@@ -229,3 +229,77 @@ def load_data(path, questions, labels_path=None):
     if labels.keys() - seen:
         raise ValueError(f"Reviewed labels refer to unknown pairs: {list(labels.keys() - seen)[:3]}")
     return {qid: table[qid] for qid in questions}, models, scored
+
+
+def load_csv_replay(results_path, scores_path=None, expected_prompts=None):
+    """Replay every supplied question, optionally reusing verified saved labels.
+
+    Raw results determine the full question set and base order. An optional score
+    archive can cover a subset, but must match every original raw field. Remaining
+    rows are scored against their reference answers; answers needing unavailable
+    choice text retain review flags. No questions or model outputs are downloaded.
+    """
+    raw, metadata = {}, {}
+    for number, row in read_csv(results_path, REQUIRED_FIELDS):
+        key = row["question_id"], row["model"]
+        if not all(part.strip() for part in key) or key in raw:
+            raise ValueError(f"{results_path}: record {number}: empty or duplicate question/model")
+        if row["question_type"] not in ("multiple-choice", "open"):
+            raise ValueError(f"Unknown question type: {key}")
+        question_metadata = tuple(row[field] for field in ("subject", "question_type", "correct_answer"))
+        if not all(value.strip() for value in question_metadata):
+            raise ValueError(f"Empty question metadata: {key}")
+        if metadata.setdefault(key[0], question_metadata) != question_metadata:
+            raise ValueError(f"Inconsistent question metadata across models: {key[0]}")
+        optional_metric(row["cost"], "cost")
+        raw[key] = row
+    if not raw:
+        raise ValueError("Raw results CSV is empty")
+    required = tuple(next(iter(raw.values()))) + (
+        "correct", "extracted_answer", "extraction", "score_source", "needs_review",
+    )
+    archived = {}
+    for number, row in read_csv(scores_path, required) if scores_path else ():
+        key = row["question_id"], row["model"]
+        if key in archived:
+            raise ValueError(f"{scores_path}: duplicate question/model: {key}")
+        source = raw.get(key)
+        if source is None:
+            raise ValueError(f"Archived score has no supplied raw outcome: {key}")
+        # CSV exports may change embedded CRLF/LF without changing an answer.
+        normalize_newlines = lambda text: text.replace("\r\n", "\n").replace("\r", "\n")
+        if any(normalize_newlines(row[field]) != normalize_newlines(value)
+               for field, value in source.items()):
+            raise ValueError(f"Archived score does not match supplied raw outcome: {key}")
+        if row["correct"] not in ("0", "1") or row["needs_review"] not in ("0", "1"):
+            raise ValueError(f"{scores_path}: record {number}: score/review flag must be 0 or 1")
+        if row["score_source"] not in ("automatic", "reviewed"):
+            raise ValueError(f"{scores_path}: record {number}: invalid score_source")
+        archived[key] = row
+    table, scored = {}, []
+    for key, source in raw.items():
+        if key in archived:
+            labels = {field: archived[key][field] for field in (
+                "extracted_answer", "extraction", "correct", "score_source", "needs_review",
+            )}
+            labels["correct"] = int(labels["correct"])
+            labels["needs_review"] = int(labels["needs_review"])
+            labels["label_origin"] = "verified_archive"
+        else:
+            prediction, extraction, correct = grade(source)
+            labels = {
+                "extracted_answer": prediction, "extraction": extraction, "correct": correct,
+                "score_source": "automatic", "label_origin": "raw_csv",
+                "needs_review": int(source["question_type"] == "open" or extraction not in (
+                    "answer_tag", "empty_response", "request_error",
+                )),
+            }
+        cost = optional_metric(source["cost"], "cost")
+        table.setdefault(key[0], {})[key[1]] = Observation(*key, labels["correct"], cost)
+        scored.append({**source, **labels})
+    if expected_prompts is not None and len(table) != expected_prompts:
+        raise ValueError(f"Expected {expected_prompts} CSV questions; found {len(table)}")
+    models = sorted({model for observations in table.values() for model in observations})
+    if len(models) != 4 or any(set(observations) != set(models) for observations in table.values()):
+        raise ValueError("CSV replay requires exactly four model outcomes per question")
+    return table, models, scored
