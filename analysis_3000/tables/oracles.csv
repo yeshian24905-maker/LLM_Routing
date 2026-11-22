@@ -1,0 +1,3 @@
+﻿oracle,correct,accuracy,cost_usd,haiku_count,luna_count,gemini_count,sonnet_count
+fixed_mean_cost_order,2828,0.9426666666666667,1.85938425,2622,203,160,15
+actual_per_question_min_cost,2828,0.9426666666666667,1.73787335,1935,889,150,26

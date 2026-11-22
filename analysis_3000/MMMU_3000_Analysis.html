@@ -1,0 +1,282 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>MMMU 3,000 题：四模型与 FT-UCB 路由分析</title><style>
+@page {size:A4; margin:16mm 14mm 17mm;}
+* {box-sizing:border-box;} body {font:10pt/1.5 'Microsoft YaHei','Noto Sans CJK SC',sans-serif;color:#243746;max-width:1050px;margin:auto;background:white;}
+h1,h2,h3 {color:#153e59;line-height:1.3;break-after:avoid;} h1.title {font-size:23pt;margin:6mm 0 3mm;} h2 {font-size:16pt;border-bottom:2px solid #278779;padding-bottom:2mm;margin-top:5mm;} h3 {font-size:11.5pt;margin-bottom:2mm;}
+.subtitle {font-size:11pt;color:#5a7180;} p {margin:2mm 0;text-align:justify;} aside {padding:2.5mm 3.5mm;background:#edf5f5;border-left:3px solid #278779;font-size:9.5pt;margin:3mm 0;}
+table {border-collapse:collapse;width:100%;font-size:8.4pt;line-height:1.35;margin:3mm 0;table-layout:auto;} th {background:#153e59;color:white;text-align:left;padding:1.5mm;} td {padding:1.4mm;border-bottom:1px solid #d9e3e8;vertical-align:top;} tr:nth-child(even) {background:#f3f7f9;} tr {break-inside:avoid;} thead {display:table-header-group;}
+figure {margin:3mm 0;break-inside:avoid;text-align:center;} img {width:auto;max-width:100%;height:auto;max-height:218mm;object-fit:contain;} figcaption {font-size:8.2pt;color:#5a7180;margin-top:1mm;text-align:left;} .pagebreak {break-before:page;}
+@media screen {body {padding:30px 45px;background:#fff;box-shadow:0 0 30px #d9e3e8;margin:25px auto;} html {background:#eef3f7;}.pagebreak {border-top:1px dashed #bbcbd4;margin-top:35px;padding-top:10px;}}
+</style><body><h1 class="title">MMMU 3,000 题：四模型与 FT-UCB 路由分析</h1>
+<p class="subtitle">30 个 area × 100 题 · 12,000 条已有模型记录 · 2026-11-22<br>全部为本地离线统计，无新增 API 调用</p>
+<h2 class="h1">主要发现</h2>
+<p class="p">Gemini 的总体准确率最高，为 89.63%（2689/3000）；Haiku 的总费用最低，为 $0.977823，准确率 81.67%。在本样本的平均成本与总体准确率两个指标上，Haiku 和 Gemini 构成观察到的 Pareto 前沿。Luna 和 Sonnet 分别比 Haiku 和 Gemini 更贵、总体正确数更少，但仍有其他三个模型都答错、仅它们答对的题目。</p>
+<table><thead><tr><th>模型</th><th>正确 / 3000</th><th>准确率</th><th>95% Wilson CI</th><th>总费用 USD</th><th>均费 / 题 USD</th><th>费用 / 答对 USD</th></tr></thead><tbody>
+<tr><td>Gemini</td><td>2689</td><td>89.63%</td><td>88.49–90.67%</td><td>$8.741369</td><td>$0.002914</td><td>$0.003251</td></tr>
+<tr><td>Sonnet</td><td>2607</td><td>86.90%</td><td>85.65–88.06%</td><td>$13.651524</td><td>$0.004551</td><td>$0.005236</td></tr>
+<tr><td>Haiku</td><td>2450</td><td>81.67%</td><td>80.24–83.01%</td><td>$0.977823</td><td>$0.000326</td><td>$0.000399</td></tr>
+<tr><td>Luna</td><td>2427</td><td>80.90%</td><td>79.45–82.27%</td><td>$1.427206</td><td>$0.000476</td><td>$0.000588</td></tr>
+</tbody></table>
+<p class="p">四模型全部答对 2149 题，全部答错 172 题；679 题的正确性存在模型间分歧。至少一个模型答对 2828 题，对应事后 oracle 上界 94.27%，比单用 Gemini 多答对 139 题。能否实现其中的增益，取决于路由器是否能在看到真实答案之前识别适合的模型。</p>
+<p class="p">FT-UCB 的主回放中，80% 阈值达到目标；82.5%、85% 与 89% 阈值均未达到目标。有限的 3000 轮内，UCB 仍让便宜模型保持乐观可行，低成本 regret 不能单独说明路由质量足够。</p>
+<aside class="note">评分口径：统一采用仓库已有的确定性评分器 v2，属于 MMMU-style 自动评分，并非官方评测器。原 Word 没有逐题标签或评分代码，前 1000 题的正确数有 1–2 题差异；本报告重新评定全部 3000 题，并保留逐条评分和复核清单。</aside>
+<figure><img src="figures/overall.png" alt="图 1｜总体准确率、95% Wilson 区间与 3000 条最新结果的费用。费用不包含被替换的历史尝试。"><figcaption>图 1｜总体准确率、95% Wilson 区间与 3000 条最新结果的费用。费用不包含被替换的历史尝试。</figcaption></figure>
+<div class="pagebreak"></div>
+<h2 class="h1">1. 数据范围、完整性与评分方法</h2>
+<table><thead><tr><th>核对项</th><th>结果</th></tr></thead><tbody>
+<tr><td>题目数量</td><td>原 1000 题 + 新增 2000 题 = 3000 道不同题目</td></tr>
+<tr><td>area 覆盖</td><td>30 个 area，各 100 题；因此 area 宏平均准确率等于总体微平均</td></tr>
+<tr><td>模型覆盖</td><td>四个模型各 3000 条，合计 12000 条；每个 question_id 均覆盖四模型</td></tr>
+<tr><td>重复检查</td><td>无重复 (question_id, model)，两批题目 ID 无交集；题干、选项和图像哈希组成的完全相同内容重复数为 0</td></tr>
+<tr><td>元数据与源文件</td><td>subject、question_type、correct_answer 与 questions.jsonl 一致；合并 CSV 与两份原 CSV 的逐字段拼接完全相同</td></tr>
+<tr><td>图片与文件保护</td><td>3383 个图像引用的内容哈希验证通过；原 Word、三份 CSV、题目与采集日志等 14 个输入文件分析前后哈希一致</td></tr>
+<tr><td>选择题 / 开放题</td><td>2841 / 159（94.70% / 5.30%）</td></tr>
+<tr><td>难度标签</td><td>Easy 944，Medium 1378，Hard 678；使用数据集已有标签</td></tr>
+</tbody></table>
+<p class="p">输入使用 mmmu_test_sample/result.csv，以及原始和 additional_2000 两份 questions.jsonl。模型 ID 按原始记录保留：</p>
+<table><thead><tr><th>简称</th><th>记录中的模型 ID</th></tr></thead><tbody>
+<tr><td>Haiku</td><td>anthropic/claude-haiku-5.5</td></tr>
+<tr><td>Luna</td><td>openai/gpt-5.6-luna</td></tr>
+<tr><td>Gemini</td><td>google/gemini-3.8-flash</td></tr>
+<tr><td>Sonnet</td><td>anthropic/claude-sonnet-5.5</td></tr>
+</tbody></table>
+<h3 class="h2">统一评分</h3>
+<p class="p">优先读取最后一个完整 &lt;answer&gt; 标签。选择题提取选项字母，或把与某个选项唯一匹配的选项文本映射为字母；带解释的明确选项标签也可识别。缺少标签时只使用已有评分器的明确选项回退，不随机猜选项。无法解析、空回答或请求失败均记为未答对。</p>
+<p class="p">开放题使用标签内内容，或无标签时的回答文本；文本规范化后匹配参考答案，数值按既有实现四舍五入到两位小数后比较。该规则可能无法识别数学等价式，也可能因回答包含多个数值而宽松命中。全部 636 条开放题回答，以及 12 条其他解析例外，共 648 条记录列入 review_queue.csv；这是待人工确认清单，不表示全部评分有误。</p>
+<p class="p">总体主结果保留这套统一自动评分，没有在本次分析中按预期结果更改标签。开放题与解析异常的人工确认可能改变准确率、oracle 和 regret；选择题单独结果也在后文列出。所谓模型一致/分歧均指二元正确性，不表示原始答案文字相同/不同。</p>
+<h3 class="h2">不确定性的解释</h3>
+<p class="p">准确率区间采用 95% Wilson 二项区间，是对本样本及统一评分口径的描述性估计。模型比较使用同题配对的精确 McNemar 检验，6 组比较采用 Holm 校正。区间与检验未包含题目来源相关性、评分误差、模型采集时间差异或测试集选择偏差，不能视作所有未来请求上的服务保证。</p>
+<div class="pagebreak"></div>
+<h2 class="h1">2. 成本、时延与调用可靠性</h2>
+<p class="p">12000 条最新结果的已记录费用合计为 $24.79792225。这相当于对每道题运行四个模型的数据采集成本；一次单模型路由应只累计被选中模型的那条记录费用。</p>
+<p class="p">原 CSV 有 9 条费用为空：Sonnet 7 条、Luna 2 条，均为 moderation_error，且错误信息明确写明 No credits were charged。原始空值保持不变；报告中的 latest-outcome 费用仅对这 9 条使用有依据的零费用，并保留 cost_source=provider_no_charge。其余费用均取原始记录。</p>
+<table><thead><tr><th>模型</th><th>请求错误</th><th>空回答</th><th>content_filter</th><th>截断 length</th><th>p50 时延 / 秒</th><th>p95 时延 / 秒</th></tr></thead><tbody>
+<tr><td>Haiku</td><td>0</td><td>7</td><td>7</td><td>0</td><td>2.61</td><td>8.86</td></tr>
+<tr><td>Luna</td><td>2</td><td>2</td><td>0</td><td>0</td><td>3.61</td><td>14.44</td></tr>
+<tr><td>Gemini</td><td>0</td><td>0</td><td>0</td><td>1</td><td>3.83</td><td>15.64</td></tr>
+<tr><td>Sonnet</td><td>7</td><td>7</td><td>0</td><td>0</td><td>2.80</td><td>7.35</td></tr>
+</tbody></table>
+<p class="p">空回答共 16 条：Haiku 有 7 条 content_filter 空回答，Sonnet 有 7 条输入拒答，Luna 有 2 条输入拒答。它们都保留在 3000 题分母内，按未答对处理。Gemini 有 1 条 length 截断，仍按保存的回答评分。空回答和请求错误存在重叠，不能把上表各列相加作为失败总数。</p>
+<p class="p">Sonnet 的 p95 时延最短，Gemini 最长。时延来自当时的调用记录，会受到提供方、重试、并发与网络影响；它不是隔离环境中的纯模型速度，也不能用 3000 × 平均时延估算并发采集的实际墙钟时间。</p>
+<table><thead><tr><th>模型</th><th>平均输入 tokens</th><th>平均输出 tokens</th><th>平均 reasoning tokens</th><th>平均时延 / 秒</th></tr></thead><tbody>
+<tr><td>Haiku</td><td>816.9</td><td>488.5</td><td>263.8</td><td>3.58</td></tr>
+<tr><td>Luna</td><td>701.0</td><td>265.8</td><td>253.7</td><td>5.03</td></tr>
+<tr><td>Gemini</td><td>1380.1</td><td>501.0</td><td>488.8</td><td>5.84</td></tr>
+<tr><td>Sonnet</td><td>817.4</td><td>292.6</td><td>0.0</td><td>3.39</td></tr>
+</tbody></table>
+<aside class="note">token 均值仅基于该字段有记录的条目。不同提供方的输入图像、输出与 reasoning token 计数口径可能不同；不应把输出与 reasoning token 直接相加，也不能从 Sonnet 的 reasoning_tokens=0 推断其没有内部推理。</aside>
+<h3 class="h2">采集账目与当前结果费用的区别</h3>
+<table><thead><tr><th>批次</th><th>带账目完成请求数</th><th>已知历史请求费用 USD</th><th>完成请求费用缺失</th><th>无费用失败日志数</th></tr></thead><tbody>
+<tr><td>original_1000</td><td>3998</td><td>$8.16110150</td><td>0</td><td>39</td></tr>
+<tr><td>additional_2000</td><td>7994</td><td>$16.63758915</td><td>0</td><td>7</td></tr>
+</tbody></table>
+<p class="p">按 generation_id 去重并应用 accounting_refresh 后，历史日志中的已知请求费用合计 $24.79869065，比最新结果费用多 $0.0007684，反映被重试替换的尝试。另有 46 条没有费用的失败日志；这里没有把它们统一补为零。因此该历史合计是日志中可核实的已知费用，不等同于已核对完整 OpenRouter 账单。</p>
+<div class="pagebreak"></div>
+<h2 class="h1">3. 准确率与成本的权衡</h2>
+<figure><img src="figures/cost_quality.png" alt="图 2｜每 1000 题费用与总体准确率；右下方的模型在这两个样本指标上受到支配。"><figcaption>图 2｜每 1000 题费用与总体准确率；右下方的模型在这两个样本指标上受到支配。</figcaption></figure>
+<p class="p">Gemini 相比 Haiku 多答对 239 题，额外费用 $7.763547，相当于每多答对一题增加约 $0.0325。这是两个完整模型结果的总体增量比值，不是逐题可实现的升级价格。</p>
+<p class="p">Luna 比 Haiku 贵约 46%，少答对 23 题；这两者的准确率差异在配对检验中不显著。Sonnet 比 Gemini 贵约 56%，少答对 82 题；Gemini 的总体优势在配对检验中显著。若目标只关心总体准确率与平均费用，当前样本支持先关注 Haiku 与 Gemini；若还关心开放题、个别 area、时延或互补能力，仍需查看其余维度。</p>
+<h3 class="h2">同一批 3000 题上的配对比较</h3>
+<table><thead><tr><th>A / B</th><th>仅 A 对</th><th>仅 B 对</th><th>B − A / pp</th><th>Holm 校正 p</th><th>双模型 oracle</th></tr></thead><tbody>
+<tr><td>Haiku / Luna</td><td>226</td><td>203</td><td>-0.77</td><td>0.288</td><td>88.43%</td></tr>
+<tr><td>Haiku / Gemini</td><td>87</td><td>326</td><td>+7.97</td><td>6.77e-33</td><td>92.53%</td></tr>
+<tr><td>Haiku / Sonnet</td><td>98</td><td>255</td><td>+5.23</td><td>8.99e-17</td><td>90.17%</td></tr>
+<tr><td>Luna / Gemini</td><td>82</td><td>344</td><td>+8.73</td><td>1.85e-38</td><td>92.37%</td></tr>
+<tr><td>Luna / Sonnet</td><td>103</td><td>283</td><td>+6.00</td><td>6.39e-20</td><td>90.33%</td></tr>
+<tr><td>Gemini / Sonnet</td><td>163</td><td>81</td><td>-2.73</td><td>3.33e-07</td><td>92.33%</td></tr>
+</tbody></table>
+<p class="p">McNemar 检验只利用两模型结果不同的题目。Haiku/Luna 的 p=0.288，不能据此断言两者真实准确率相等，也不能宣称 Haiku 显著优于 Luna。其余五组在 Holm 校正后 p&lt;0.05；这些比较以自动评分标签可靠、题目间适合该近似为前提。</p>
+<div class="pagebreak"></div>
+<h2 class="h1">4. 题型、难度与多图题</h2>
+<table><thead><tr><th>模型</th><th>选择题：正确 / 2841</th><th>选择题准确率（95% CI）</th><th>开放题：正确 / 159</th><th>开放题准确率（95% CI）</th></tr></thead><tbody>
+<tr><td>Haiku</td><td>2348</td><td>82.65%<br>81.21–84.00%</td><td>102</td><td>64.15%<br>56.44–71.19%</td></tr>
+<tr><td>Luna</td><td>2341</td><td>82.40%<br>80.96–83.76%</td><td>86</td><td>54.09%<br>46.34–61.65%</td></tr>
+<tr><td>Gemini</td><td>2581</td><td>90.85%<br>89.73–91.85%</td><td>108</td><td>67.92%<br>60.32–74.68%</td></tr>
+<tr><td>Sonnet</td><td>2497</td><td>87.89%<br>86.64–89.04%</td><td>110</td><td>69.18%<br>61.62–75.84%</td></tr>
+</tbody></table>
+<p class="p">开放题明显更难：Sonnet 69.18%、Gemini 67.92%、Haiku 64.15%、Luna 54.09%。Sonnet 只比 Gemini 多答对 2 道开放题，不能凭这个小差异宣称其开放题优势稳定。样本从原来的 55 道增加到 159 道，但仍远少于选择题，且全部开放题标签需要人工复核。</p>
+<p class="p">在占 94.7% 的选择题上，Gemini 仍领先，Haiku 与 Luna 几乎持平。因此总体排序并非只由开放题造成。选择题的数值或文本格式例外仍可能影响少量标签。</p>
+<table><thead><tr><th>难度</th><th>题数</th><th>Haiku</th><th>Luna</th><th>Gemini</th><th>Sonnet</th></tr></thead><tbody>
+<tr><td>Easy</td><td>944</td><td>88.35%</td><td>87.61%</td><td>93.33%</td><td>92.06%</td></tr>
+<tr><td>Medium</td><td>1378</td><td>80.33%</td><td>80.12%</td><td>89.19%</td><td>85.34%</td></tr>
+<tr><td>Hard</td><td>678</td><td>75.07%</td><td>73.16%</td><td>85.40%</td><td>82.89%</td></tr>
+</tbody></table>
+<p class="p">难度从 Easy 到 Hard 时，Gemini 从 93.33% 降至 85.40%，Haiku 从 88.35% 降至 75.07%，Luna 从 87.61% 降至 73.16%。难题是扩大模型质量差距的主要观察维度之一，但 difficulty 来自数据集标签；不同难度的 area、题型构成也不相同，不能把相关性解释为单一因果效果。</p>
+<figure><img src="figures/format_difficulty.png" alt="图 3｜按题型与数据集难度标签划分的准确率。完整分组区间与费用见表格数据。"><figcaption>图 3｜按题型与数据集难度标签划分的准确率。完整分组区间与费用见表格数据。</figcaption></figure>
+<div class="pagebreak"></div>
+<h2 class="h1">4.1 多图题的样本限制</h2>
+<table><thead><tr><th>每题图片数</th><th>题数</th><th>Haiku</th><th>Luna</th><th>Gemini</th><th>Sonnet</th></tr></thead><tbody>
+<tr><td>1</td><td>2807</td><td>81.76%</td><td>80.90%</td><td>89.78%</td><td>87.07%</td></tr>
+<tr><td>2</td><td>103</td><td>80.58%</td><td>74.76%</td><td>83.50%</td><td>81.55%</td></tr>
+<tr><td>3</td><td>19</td><td>89.47%</td><td>84.21%</td><td>94.74%</td><td>84.21%</td></tr>
+<tr><td>4</td><td>45</td><td>73.33%</td><td>84.44%</td><td>88.89%</td><td>82.22%</td></tr>
+<tr><td>5</td><td>23</td><td>82.61%</td><td>95.65%</td><td>95.65%</td><td>100.00%</td></tr>
+<tr><td>6</td><td>3</td><td>100.00%</td><td>100.00%</td><td>100.00%</td><td>100.00%</td></tr>
+</tbody></table>
+<p class="p">2807 道题只有一张图；6 张图仅 3 题。多图组准确率没有单调下降，说明不能仅凭这份分组表推断图像数量对模型能力的影响。小组样本的极高准确率尤其不应作为稳定结论。</p>
+<div class="pagebreak"></div>
+<h2 class="h1">5. 30 个 area 的表现</h2>
+<figure><img src="figures/area_accuracy.png" alt="图 4｜每个 area 均为 100 题，因此表内百分数也等于答对题数；色标跨所有 area 保持一致。"><figcaption>图 4｜每个 area 均为 100 题，因此表内百分数也等于答对题数；色标跨所有 area 保持一致。</figcaption></figure>
+<div class="pagebreak"></div>
+<h2 class="h1">5.1 Area 准确率与总费用（1–15）</h2>
+<aside class="note">每格为“准确率 / 该 area 的 100 条结果费用 USD”。费用遵循前述已记录费用与明确未扣费处理。各 area 的 95% 区间详见 Excel 的 area 表。</aside>
+<table><thead><tr><th>Area（n=100）</th><th>Haiku</th><th>Luna</th><th>Gemini</th><th>Sonnet</th></tr></thead><tbody>
+<tr><td>Accounting</td><td>89.00%<br>$0.02667</td><td>87.00%<br>$0.03834</td><td>93.00%<br>$0.29988</td><td>93.00%<br>$0.35140</td></tr>
+<tr><td>Agriculture</td><td>69.00%<br>$0.03282</td><td>73.00%<br>$0.05725</td><td>86.00%<br>$0.17124</td><td>82.00%<br>$0.60709</td></tr>
+<tr><td>Architecture and Engineering</td><td>86.00%<br>$0.08742</td><td>84.00%<br>$0.10296</td><td>88.00%<br>$0.47099</td><td>89.00%<br>$0.75314</td></tr>
+<tr><td>Art</td><td>85.00%<br>$0.02243</td><td>83.00%<br>$0.03373</td><td>96.00%<br>$0.15317</td><td>93.00%<br>$0.34695</td></tr>
+<tr><td>Art Theory</td><td>79.00%<br>$0.02138</td><td>78.00%<br>$0.03752</td><td>86.00%<br>$0.16236</td><td>82.00%<br>$0.38095</td></tr>
+<tr><td>Basic Medical Science</td><td>84.00%<br>$0.01728</td><td>88.00%<br>$0.01946</td><td>97.00%<br>$0.17130</td><td>91.00%<br>$0.29820</td></tr>
+<tr><td>Biology</td><td>77.00%<br>$0.03132</td><td>76.00%<br>$0.04327</td><td>95.00%<br>$0.24482</td><td>87.00%<br>$0.45626</td></tr>
+<tr><td>Chemistry</td><td>85.00%<br>$0.02869</td><td>85.00%<br>$0.04770</td><td>95.00%<br>$0.31722</td><td>89.00%<br>$0.43991</td></tr>
+<tr><td>Clinical Medicine</td><td>82.00%<br>$0.02499</td><td>78.00%<br>$0.02856</td><td>90.00%<br>$0.19036</td><td>80.00%<br>$0.34903</td></tr>
+<tr><td>Computer Science</td><td>84.00%<br>$0.02977</td><td>85.00%<br>$0.04645</td><td>91.00%<br>$0.28908</td><td>90.00%<br>$0.47400</td></tr>
+<tr><td>Design</td><td>90.00%<br>$0.01491</td><td>89.00%<br>$0.02270</td><td>94.00%<br>$0.19015</td><td>92.00%<br>$0.25286</td></tr>
+<tr><td>Diagnostics and Laboratory Medicine</td><td>63.00%<br>$0.03400</td><td>68.00%<br>$0.05947</td><td>74.00%<br>$0.21556</td><td>75.00%<br>$0.56483</td></tr>
+<tr><td>Economics</td><td>95.00%<br>$0.02036</td><td>94.00%<br>$0.02501</td><td>96.00%<br>$0.19691</td><td>97.00%<br>$0.32428</td></tr>
+<tr><td>Electronics</td><td>76.00%<br>$0.07042</td><td>75.00%<br>$0.07367</td><td>76.00%<br>$0.47865</td><td>76.00%<br>$0.59151</td></tr>
+<tr><td>Energy and Power</td><td>88.00%<br>$0.04220</td><td>84.00%<br>$0.05862</td><td>94.00%<br>$0.38617</td><td>89.00%<br>$0.57357</td></tr>
+</tbody></table>
+<div class="pagebreak"></div>
+<h2 class="h1">5.2 Area 准确率与总费用（16–30）</h2>
+<aside class="note">每格为“准确率 / 该 area 的 100 条结果费用 USD”。费用遵循前述已记录费用与明确未扣费处理。各 area 的 95% 区间详见 Excel 的 area 表。</aside>
+<table><thead><tr><th>Area（n=100）</th><th>Haiku</th><th>Luna</th><th>Gemini</th><th>Sonnet</th></tr></thead><tbody>
+<tr><td>Finance</td><td>85.00%<br>$0.02795</td><td>78.00%<br>$0.04475</td><td>87.00%<br>$0.32008</td><td>87.00%<br>$0.40989</td></tr>
+<tr><td>Geography</td><td>73.00%<br>$0.02704</td><td>67.00%<br>$0.04463</td><td>81.00%<br>$0.26999</td><td>80.00%<br>$0.41360</td></tr>
+<tr><td>History</td><td>83.00%<br>$0.02189</td><td>87.00%<br>$0.03322</td><td>95.00%<br>$0.21422</td><td>87.00%<br>$0.40860</td></tr>
+<tr><td>Literature</td><td>91.00%<br>$0.01199</td><td>89.00%<br>$0.01937</td><td>96.00%<br>$0.17160</td><td>94.00%<br>$0.26948</td></tr>
+<tr><td>Manage</td><td>81.00%<br>$0.02682</td><td>78.00%<br>$0.03509</td><td>90.00%<br>$0.28196</td><td>87.00%<br>$0.40444</td></tr>
+<tr><td>Marketing</td><td>95.00%<br>$0.02814</td><td>92.00%<br>$0.03730</td><td>93.00%<br>$0.27028</td><td>93.00%<br>$0.44020</td></tr>
+<tr><td>Materials</td><td>72.00%<br>$0.05649</td><td>76.00%<br>$0.09320</td><td>92.00%<br>$0.39412</td><td>85.00%<br>$0.70065</td></tr>
+<tr><td>Math</td><td>88.00%<br>$0.04256</td><td>81.00%<br>$0.06465</td><td>95.00%<br>$0.39759</td><td>90.00%<br>$0.49812</td></tr>
+<tr><td>Mechanical Engineering</td><td>70.00%<br>$0.05002</td><td>80.00%<br>$0.07179</td><td>83.00%<br>$0.53274</td><td>84.00%<br>$0.68868</td></tr>
+<tr><td>Music</td><td>52.00%<br>$0.06400</td><td>42.00%<br>$0.12987</td><td>70.00%<br>$0.79985</td><td>64.00%<br>$0.78604</td></tr>
+<tr><td>Pharmacy</td><td>85.00%<br>$0.02288</td><td>83.00%<br>$0.02683</td><td>89.00%<br>$0.23788</td><td>87.00%<br>$0.32651</td></tr>
+<tr><td>Physics</td><td>85.00%<br>$0.02367</td><td>91.00%<br>$0.02941</td><td>95.00%<br>$0.25709</td><td>94.00%<br>$0.35114</td></tr>
+<tr><td>Psychology</td><td>87.00%<br>$0.02446</td><td>87.00%<br>$0.03467</td><td>90.00%<br>$0.22102</td><td>92.00%<br>$0.44209</td></tr>
+<tr><td>Public Health</td><td>90.00%<br>$0.02448</td><td>83.00%<br>$0.03341</td><td>93.00%<br>$0.24864</td><td>92.00%<br>$0.35385</td></tr>
+<tr><td>Sociology</td><td>81.00%<br>$0.02079</td><td>86.00%<br>$0.03431</td><td>89.00%<br>$0.18648</td><td>86.00%<br>$0.39425</td></tr>
+</tbody></table>
+<div class="pagebreak"></div>
+<h2 class="h1">5.3 Area 层面的主要现象</h2>
+<p class="p">按四模型准确率的平均值，Music 最难（57.00%），其次为 Diagnostics and Laboratory Medicine（70.00%）、Geography（75.25%）与 Electronics（75.75%）。Music 中 Gemini 70%、Sonnet 64%、Haiku 52%、Luna 42%；即使使用最强单模型，也仍有较大失败空间。</p>
+<p class="p">Gemini 在 24/30 个 area 中达到最高准确率（含并列），其中 21 个为独占第一；Sonnet 为 8 个（独占 5 个），Haiku 为 2 个（独占 1 个），Luna 没有 area 第一。并列会重复计数，四个数量不应相加得到 30。</p>
+<p class="p">Sonnet 在 Architecture and Engineering、Diagnostics and Laboratory Medicine、Economics、Mechanical Engineering 各比 Gemini 多答对 1 题，在 Psychology 多 2 题；Haiku 在 Marketing 为 95%，比 Gemini 多 2 题。每个 area 只有 100 题，这类 1–2 题的样本优势不足以支持直接部署固定领域路由。</p>
+<p class="p">一个在同一份数据上事后选出每个 area 最准模型的 area-only oracle 可答对 2697/3000（89.90%），费用 $9.226809。它仅比单用 Gemini 多答对 8 题，且费用更高；这提示从全局 area 标签获得的观察到的增益远小于逐题 oracle。但这个参照在原样本上选模型并评分，有选择偏差，不能当作泛化结果。</p>
+<div class="pagebreak"></div>
+<h2 class="h1">6. 模型互补性与 routing opportunity</h2>
+<table><thead><tr><th>答对模型数</th><th>题目数</th><th>占比</th></tr></thead><tbody>
+<tr><td>0</td><td>172</td><td>5.73%</td></tr>
+<tr><td>1</td><td>123</td><td>4.10%</td></tr>
+<tr><td>2</td><td>214</td><td>7.13%</td></tr>
+<tr><td>3</td><td>342</td><td>11.40%</td></tr>
+<tr><td>4</td><td>2149</td><td>71.63%</td></tr>
+</tbody></table>
+<p class="p">四模型全对 2149 题（71.63%）；全错 172 题（5.73%）；存在正确性分歧 679 题（22.63%）。恰好一个模型答对 123 题，其中 Gemini 独占正确 67 题、Haiku 22 题、Luna 19 题、Sonnet 15 题。总体较弱的模型仍可能提供独特的正确答案，不能把总体支配关系等同于逐题无用。</p>
+<p class="p">Haiku 与 Gemini 合起来至少一个答对 2776/3000（92.53%），比单用 Gemini 多 87 题；Gemini 可救回 Haiku 的 326/550 个错误（59.27%）。反过来，Haiku 可救回 Gemini 的 87/311 个错误（27.97%）。这些是已知正确性后的覆盖关系，不是已经实现的自动升级策略。</p>
+<figure><img src="figures/complementarity.png" alt="图 5｜左：正确性重叠；右：列模型能答对多少比例的行模型错误。救回率需要真实答案才能事后计算。"><figcaption>图 5｜左：正确性重叠；右：列模型能答对多少比例的行模型错误。救回率需要真实答案才能事后计算。</figcaption></figure>
+<h3 class="h2">两个事后 oracle：相同上界，不同成本假设</h3>
+<table><thead><tr><th>规则</th><th>正确数 / 准确率</th><th>费用 USD</th><th>Haiku / Luna / Gemini / Sonnet 选择数</th></tr></thead><tbody>
+<tr><td>固定平均费用顺序选最便宜正确模型</td><td>2828 / 94.27%</td><td>$1.859384</td><td>2622 / 203 / 160 / 15</td></tr>
+<tr><td>按每题实际记录费用选最便宜正确模型</td><td>2828 / 94.27%</td><td>$1.737873</td><td>1935 / 889 / 150 / 26</td></tr>
+</tbody></table>
+<p class="p">若四模型都错，第一个 oracle 回落到固定平均费用最低的模型；第二个回落到该题实际费用最低的模型。两者都只计被最终选中那一个回答的费用，不计试遍所有模型后发现正确答案的费用。第二个还预知了各模型在该题的实际费用，因此其信息假设更强。</p>
+<p class="p">两者都达到 2828/3000（94.27%），但都需要预知正确性，不能部署。它们是这四份已保存回答在当前评分下的覆盖上界，不是所有可能模型、所有重采样回答或检索/工具系统的理论能力上界。172 道全错题与 123 道唯一正确题已分别导出，便于后续审查。</p>
+<div class="pagebreak"></div>
+<h2 class="h1">7. 前 1000 题与新增 2000 题的比较</h2>
+<table><thead><tr><th>模型</th><th>原 Word 正确数 / 1000</th><th>统一重评 / 1000</th><th>新增正确数 / 2000</th><th>新增准确率</th><th>变化 / pp</th><th>校正 p</th></tr></thead><tbody>
+<tr><td>Haiku</td><td>824</td><td>826</td><td>1624</td><td>81.20%</td><td>-1.40</td><td>0.658</td></tr>
+<tr><td>Luna</td><td>827</td><td>825</td><td>1602</td><td>80.10%</td><td>-2.40</td><td>0.507</td></tr>
+<tr><td>Gemini</td><td>908</td><td>908</td><td>1781</td><td>89.05%</td><td>-1.75</td><td>0.507</td></tr>
+<tr><td>Sonnet</td><td>879</td><td>878</td><td>1729</td><td>86.45%</td><td>-1.35</td><td>0.658</td></tr>
+</tbody></table>
+<p class="p">原 Word 中 Haiku 824、Luna 827、Sonnet 879、Gemini 908；仓库评分器统一重评得到 826、825、878、908。没有原报告逐题标签，因此无法确定差异来自哪些人工判断或解析规则。本报告不会把这两套计数直接拼接；新增与原批次都用同一 v2 评分。</p>
+<p class="p">新增 2000 题中，Haiku 81.20%、Luna 80.10%、Gemini 89.05%、Sonnet 86.45%；四者都比原批次低约 1.35–2.40 个百分点。但两批不同题目的双侧 Fisher 检验经 4 组 Holm 校正后均不显著，Newcombe/Wilson 差值区间也均跨 0。数据不支持仅凭这些差异宣布模型退化。</p>
+<table><thead><tr><th>模型</th><th>新增 − 原批次 / pp</th><th>差值的 95% 区间 / pp</th></tr></thead><tbody>
+<tr><td>Haiku</td><td>-1.40</td><td>-4.24 至 +1.57</td></tr>
+<tr><td>Luna</td><td>-2.40</td><td>-5.27 至 +0.60</td></tr>
+<tr><td>Gemini</td><td>-1.75</td><td>-3.93 至 +0.59</td></tr>
+<tr><td>Sonnet</td><td>-1.35</td><td>-3.80 至 +1.25</td></tr>
+</tbody></table>
+<figure><img src="figures/cohort_accuracy.png" alt="图 6｜同一评分口径下，两批数据的模型准确率。题目不同，不能当作同题重复实验。"><figcaption>图 6｜同一评分口径下，两批数据的模型准确率。题目不同，不能当作同题重复实验。</figcaption></figure>
+<p class="p">前 1000 题各 area 只有 33 或 34 题；新增题按原样本的补足量抽样到每 area 总计 100 题。两批在题型、难度、内容和采集时间上仍有差异。新增与原批次的比较是描述性稳定性检查，无法单独区分抽样波动、题目构成和调用提供方变化。</p>
+<div class="pagebreak"></div>
+<h2 class="h1">8. 四个阈值下的静态可行模型</h2>
+<p class="p">把四个模型各自的全 3000 题准确率作为离线均值估计，可得到下面的事后可行集合。此表是比较基准，未向 FT-UCB 的选择步骤提供真实均值。</p>
+<table><thead><tr><th>固定阈值</th><th>样本均值满足阈值的模型</th><th>平均费用最低的可行模型</th><th>其准确率</th><th>其 95% 区间下界是否过阈值</th></tr></thead><tbody>
+<tr><td>89.00%</td><td>Gemini</td><td>Gemini</td><td>89.63%</td><td>否</td></tr>
+<tr><td>85.00%</td><td>Gemini; Sonnet</td><td>Gemini</td><td>89.63%</td><td>是</td></tr>
+<tr><td>80.00%</td><td>Haiku; Luna; Gemini; Sonnet</td><td>Haiku</td><td>81.67%</td><td>是</td></tr>
+<tr><td>82.50%</td><td>Gemini; Sonnet</td><td>Gemini</td><td>89.63%</td><td>是</td></tr>
+</tbody></table>
+<p class="p">89% 阈值只有 Gemini 在样本均值上可行；其 95% Wilson 区间为 88.49–90.67%，下界仍低于 89%，所以这份样本尚不足以把“真实准确率至少 89%”作为置信保证。85% 与 82.5% 时 Gemini 和 Sonnet 可行，但 Gemini 更便宜。80% 时四模型的点估计都过线，Haiku 最便宜；Luna 自身的 95% 区间下界仍低于 80%。</p>
+<h3 class="h2">FT-UCB 的实验设置</h3>
+<p class="p">每次回放共 3000 轮，每道题只出现一次；四个模型是四个 arm。按固定费用从低到高编号并各初始化一次，之后每轮计算经验准确率 + sqrt(2 ln(t) / 已采样次数)，从 UCB 不低于阈值的模型中选择费用最低者；候选集为空时均匀随机选取。UCB 不截断到 1。只读取被选中模型当前题的正确性来更新该 arm。算法依据用户提供的 Algorithm 6，并对照来源 [1]。</p>
+<p class="p">主结果使用 seed=42；题目顺序为拼接两个 questions.jsonl 后，以 Random(&#x27;order:42&#x27;) 打乱。另用 seeds 42–141 各回放一次，四个阈值共享各自 seed 对应的同一题目顺序。这些重排不是重新调用模型，也不是 100 份独立数据集。</p>
+<table><thead><tr><th>模型</th><th>固定费用 c：USD / 调用</th><th>费用可用记录数</th><th>离线评价均值 μ</th></tr></thead><tbody>
+<tr><td>Haiku</td><td>0.0003259409</td><td>3000</td><td>81.67%</td></tr>
+<tr><td>Luna</td><td>0.0004760528</td><td>2998</td><td>80.90%</td></tr>
+<tr><td>Gemini</td><td>0.0029137898</td><td>3000</td><td>89.63%</td></tr>
+<tr><td>Sonnet</td><td>0.0045611507</td><td>2993</td><td>86.90%</td></tr>
+</tbody></table>
+<aside class="note">论文采用事先已知的固定 arm 费用。本实验沿用仓库的离线近似：c 为该模型全部非空 CSV 费用的平均值，属于全数据校准，不是上线前独立标定。实际累计费用使用逐题保存的费用；regret 使用固定 c，两者必须分开。数据为无放回有限题库，且提供即时正确性反馈，与论文的平稳随机 bandit 假设有差别。</aside>
+<div class="pagebreak"></div>
+<h2 class="h1">9. FT-UCB：3000 轮主回放</h2>
+<table><thead><tr><th>阈值</th><th>Haiku</th><th>Luna</th><th>Gemini</th><th>Sonnet</th><th>正确数</th><th>准确率</th><th>逐题费用 USD</th><th>达标</th></tr></thead><tbody>
+<tr><td>89.00%</td><td>2818</td><td>180</td><td>1</td><td>1</td><td>2449</td><td>81.63%</td><td>$1.004021</td><td>否</td></tr>
+<tr><td>85.00%</td><td>2997</td><td>1</td><td>1</td><td>1</td><td>2450</td><td>81.67%</td><td>$0.981221</td><td>否</td></tr>
+<tr><td>80.00%</td><td>2997</td><td>1</td><td>1</td><td>1</td><td>2450</td><td>81.67%</td><td>$0.981221</td><td>是</td></tr>
+<tr><td>82.50%</td><td>2997</td><td>1</td><td>1</td><td>1</td><td>2450</td><td>81.67%</td><td>$0.981221</td><td>否</td></tr>
+</tbody></table>
+<p class="p">89% 阈值下，Haiku 在第 2807 轮首次于初始化之后被其他模型替代。主回放最终仍选 Haiku 2818 次、Luna 180 次，Gemini 和 Sonnet 各 1 次。Luna 的总体准确率也低于 89%；它得到更多选择，是因为低采样量带来的宽 UCB 让它仍处于候选集，而非算法已经识别它达到目标。</p>
+<p class="p">其余三个阈值都选 Haiku 2997 次，另三个模型各 1 次。Haiku 在这条主路径中初始化后的最小 UCB 约 88.77%，始终高于 85%、82.5% 与 80%，因此这些阈值产生完全相同的选择序列与实际结果。</p>
+<p class="p">3000 轮末 n≈3000 时，sqrt(2 ln(3000)/3000)≈7.31 个百分点，仍然很宽。Haiku 的全数据均值约 81.67%，加上该数量级的探索项约为 88.98%；这解释了为什么 89% 附近才开始排除它。该计算只是对探索项尺度的说明，实际决策严格使用该路径当时的均值、t 和 n。</p>
+<figure><img src="figures/ft_ucb_behavior.png" alt="图 7｜主回放的模型选择数与累计准确率；85%、82.5%、80% 的路径重合。"><figcaption>图 7｜主回放的模型选择数与累计准确率；85%、82.5%、80% 的路径重合。</figcaption></figure>
+<p class="p">FT-UCB 的输入阈值是可行性学习的目标，不是每轮或有限总轮次准确率的硬约束。这里不应把“运行了阈值 89% 的算法”写成“路由器达到 89%”。本次结果表明高阈值下仍有显著质量缺口；也不能由单个短时实验推出算法在所有长时随机环境中失效。</p>
+<div class="pagebreak"></div>
+<h2 class="h1">10. Cost / quality regret 曲线</h2>
+<p class="p">使用来源 [1] 的正部 gap 定义，并在固定阈值设置中用 μ₀ 代替可行阈值。a* 是全数据均值达到阈值的模型中固定费用最低者；[x]+ = max(0,x)。</p>
+<aside class="note">R_C(t) = Σ(s=1…t) [c(k_s) − c(a*)]+<br>R_Q(t) = Σ(s=1…t) [μ₀ − μ̂_full(k_s)]+</aside>
+<p class="p">μ̂_full 是每个模型在全 3000 题上的统一评分准确率，只用于评价 gap。这里是单条回放路径上的经验 plug-in pseudo-regret，使用估计均值，未计算论文对真实随机环境的精确期望。100 次重排均值用于顺序敏感性分析，不是新的真实 reward 分布。</p>
+<table><thead><tr><th>阈值</th><th>离线 a*</th><th>R_C(3000) / USD</th><th>R_Q(3000)</th><th>按固定 c 累计费用 USD</th></tr></thead><tbody>
+<tr><td>89.00%</td><td>Gemini</td><td>0.00164736</td><td>221.254333</td><td>$1.011666</td></tr>
+<tr><td>85.00%</td><td>Gemini</td><td>0.00164736</td><td>99.941000</td><td>$0.984796</td></tr>
+<tr><td>80.00%</td><td>Haiku</td><td>0.00697317</td><td>0.000000</td><td>$0.984796</td></tr>
+<tr><td>82.50%</td><td>Gemini</td><td>0.00164736</td><td>24.991000</td><td>$0.984796</td></tr>
+</tbody></table>
+<figure><img src="figures/ft_ucb_regret.png" alt="图 8｜t=1…3000 的经验 cost 与 quality pseudo-regret。cost 图中 89%、85%、82.5% 的路径重合。"><figcaption>图 8｜t=1…3000 的经验 cost 与 quality pseudo-regret。cost 图中 89%、85%、82.5% 的路径重合。</figcaption></figure>
+<p class="p">Cost regret 不奖励选择比 a* 更便宜的模型，也不惩罚这些便宜模型的质量不足；因此高阈值下 cost regret 仅约 $0.001647，并不表示质量达标。82.5% 与 85% 选择序列相同，但阈值不同，quality regret 分别为 24.991 与 99.941。</p>
+<p class="p">Quality regret 的单位是累计概率差，不是美元，也不是实际答错题数。它不能替换为 max(0, μ₀×t−累计正确数)。所有 regret 均采用四模型平均费用与全数据均值这套共同参照，未与逐题最便宜正确模型的 oracle 混用。</p>
+<div class="pagebreak"></div>
+<h2 class="h1">11. 题目顺序敏感性：100 次离线回放</h2>
+<table><thead><tr><th>阈值</th><th>平均准确率</th><th>准确率 P05–P95</th><th>平均逐题费用 USD</th><th>达标回放数 / 100</th><th>Haiku 选择数范围</th></tr></thead><tbody>
+<tr><td>89.00%</td><td>81.59%</td><td>81.27%–81.80%</td><td>$1.003410</td><td>0</td><td>1869–2997</td></tr>
+<tr><td>85.00%</td><td>81.67%</td><td>81.63%–81.70%</td><td>$0.985239</td><td>0</td><td>2997–2997</td></tr>
+<tr><td>80.00%</td><td>81.67%</td><td>81.63%–81.70%</td><td>$0.985239</td><td>100</td><td>2997–2997</td></tr>
+<tr><td>82.50%</td><td>81.67%</td><td>81.63%–81.70%</td><td>$0.985239</td><td>0</td><td>2997–2997</td></tr>
+</tbody></table>
+<p class="p">100 次回放中，80% 阈值全部达标，其余三个阈值均未达标。89% 阈值下，Haiku 被选 1869–2997 次，变化由前序题目反馈导致；尽管选择数会变，Gemini 在这 100 次回放中均只被初始化选择一次，Luna 的乐观 UCB 足以长期吸收被 Haiku 让出的选择。</p>
+<p class="p">表中的 P05–P95 是同一批已保存回答在 100 个顺序下的经验分位数，不能解释为模型泛化准确率的 90% 置信区间。85%、82.5% 和 80% 下，选择数不变，只有初始化时其他模型对应的题目及其逐题费用略有变化。</p>
+<h3 class="h2">对后续 routing 研究的含义</h3>
+<p class="p">当前数据支持两个不同问题：一是是否能以更低费用选择一个达到总体质量要求的 arm；二是是否能利用逐题互补性超过最强单模型。FT-UCB 是使用 arm 历史均值的非上下文策略，不直接利用题目内容、area 或候选答案差异，因此不能期待它自动达到 94.27% 的逐题 oracle 上界。</p>
+<p class="p">若继续研究，应先完成开放题与解析异常的人工复核，冻结逐题标签；随后预先规定训练/校准与评估划分，独立标定固定费用，再比较 FT-UCB、单用 Haiku、单用 Gemini 与新的路由方法。阈值、探索强度或领域规则若依据同一测试集调参，需要独立评估集或交叉验证。此处没有修改用户指定的 FT-UCB，也没有新增模型采集。</p>
+<div class="pagebreak"></div>
+<h2 class="h1">12. 输出说明与复现</h2>
+<table><thead><tr><th>文件 / 目录</th><th>用途</th></tr></thead><tbody>
+<tr><td>MMMU_3000_Analysis.docx / .html / .pdf</td><td>同内容报告；PDF 由本地浏览器导出（若可用）</td></tr>
+<tr><td>analysis_tables.xlsx</td><td>完整模型、分组、配对、oracle、FT-UCB 及逐条评分表</td></tr>
+<tr><td>tables/model_summary.csv / by_subject.csv</td><td>模型总表与 30 area 明细，包含分组 95% 区间、费用及质量字段</td></tr>
+<tr><td>tables/scored_results.csv / review_queue.csv</td><td>12000 条评分记录，以及 648 条待复核记录；可用 question_id+model 关联原始回答</td></tr>
+<tr><td>tables/question_outcomes.csv</td><td>3000 道题的四模型正确性与两个 oracle 的选择和费用</td></tr>
+<tr><td>tables/all_models_wrong.csv / only_one_model_correct.csv</td><td>172 道全错题与 123 道唯一正确题</td></tr>
+<tr><td>tables/ft_ucb_trace.csv</td><td>四阈值各 3000 轮，共 12000 条主路径选择、反馈、UCB、累计费用及 regret</td></tr>
+<tr><td>tables/ft_ucb_runs.csv / ft_ucb_order_sensitivity.csv</td><td>400 次回放总表及四阈值的重排汇总</td></tr>
+<tr><td>figures/</td><td>8 组图，分别提供 PNG 与矢量 PDF</td></tr>
+<tr><td>summary.json / validation.json</td><td>完整统计、源文件 SHA-256、无重复与原始数据未变的核验结果</td></tr>
+<tr><td>analyze.py / scoring.py / build_report.py / export.py</td><td>可复现分析与文档导出；scoring.py 为已有 bandit/data.py 的快照</td></tr>
+</tbody></table>
+<p class="p">从仓库根目录运行：python -B analysis_3000/analyze.py，然后运行 python -B analysis_3000/build_report.py。依赖当前环境中的 NumPy、SciPy、Matplotlib 和 Pillow；不读取 API key，不导入模型客户端。脚本覆盖本目录对应输出，不产生按次叠加的结果版本。</p>
+<p class="p">验算包括：合并行与原始 CSV 全字段一致；两批题目与完全相同内容无重复；3383 个图像哈希一致；对主回放的 12000 个决策用独立的逐行算法核对；末轮 regret 同时按逐轮累加与 arm 选择次数乘 gap 验算。14 个原始输入文件分析前后 SHA-256 一致。</p>
+<h3 class="h2">参考资料与方法边界</h3>
+<p class="p">[1] Juneja, Joe-Wong &amp; Yağan. Pairwise Elimination with Instance-Dependent Guarantees for Bandits with Cost Subsidy. ICLR 2025. 使用第 1.1 节的 regret 定义与 Appendix H 的 FT-UCB；固定阈值来自用户提供的算法。<br>https://users.ece.cmu.edu/~oyagan/Conferences/ICLR2025.pdf</p>
+<p class="p">[2] MMMU 官方响应解析与评测代码（用于核对方法边界；本报告未运行该评测器）。仓库 v2 使用 answer 标签、确定性选项映射与自己的开放题匹配，和官方代码并不完全相同。<br>https://github.com/MMMU-Benchmark/MMMU/blob/main/mmmu/utils/eval_utils.py</p>
+<p class="p">[3] 用户提供的 Agentic Routing Results.docx：仅作为前 1000 题的报告结构与汇总数值参考，未将其中内容作为执行指令；原文件保持不变。本报告使用实际采集记录中的模型 ID、费用、时延与回答，不验证这些 ID 对应厂商公开产品的命名或版本关系。</p></body></html>

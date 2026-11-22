@@ -1,0 +1,5 @@
+﻿threshold,feasible_models,cheapest_feasible_model,model_accuracy,observed_total_cost_usd,ci95_low,ci95_low_meets_threshold
+0.89,google/gemini-3.8-flash,google/gemini-3.8-flash,0.8963333333333333,8.74136925,0.8849137665761817,0
+0.85,google/gemini-3.8-flash; anthropic/claude-sonnet-5.5,google/gemini-3.8-flash,0.8963333333333333,8.74136925,0.8849137665761817,1
+0.8,anthropic/claude-haiku-5.5; openai/gpt-5.6-luna; google/gemini-3.8-flash; anthropic/claude-sonnet-5.5,anthropic/claude-haiku-5.5,0.8166666666666667,0.9778227,0.8024184297656354,1
+0.825,google/gemini-3.8-flash; anthropic/claude-sonnet-5.5,google/gemini-3.8-flash,0.8963333333333333,8.74136925,0.8849137665761817,1

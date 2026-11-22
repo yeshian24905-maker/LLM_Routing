@@ -1,0 +1,59 @@
+{
+  "unique_questions": 3000,
+  "observations": 12000,
+  "models": [
+    "anthropic/claude-haiku-5.5",
+    "openai/gpt-5.6-luna",
+    "google/gemini-3.8-flash",
+    "anthropic/claude-sonnet-5.5"
+  ],
+  "questions_per_area": 100,
+  "areas": 30,
+  "duplicate_pairs": 0,
+  "overlapping_cohort_ids": 0,
+  "duplicate_exact_prompt_content": 0,
+  "merged_rows_equal_source_concatenation": true,
+  "image_hashes_verified": 3383,
+  "source_files_unchanged": true,
+  "source_sha256": {
+    "C:\\Users\\24905\\Desktop\\Project\\LLM_Routing\\mmmu_test_sample\\result.csv": "c0b766cf2f62185203177629bc6fef27995dc28a493c1af70fcad8b55c8ee9fa",
+    "C:\\Users\\24905\\Downloads\\Agentic Routing Results.docx": "fabb94447148f810b2b875dff601af5a513149b24f9fe0cf9bfa0ff24906762a",
+    "C:\\Users\\24905\\Desktop\\Project\\LLM_Routing\\mmmu_test_sample\\questions.jsonl": "d79a94820292303fcb9eb61d92eb1bfda97a2f3aa35675ac4fe9ca59abf77647",
+    "C:\\Users\\24905\\Desktop\\Project\\LLM_Routing\\mmmu_test_sample\\dataset_manifest.json": "9dfc83e4b32ed792e8cf1f608eb184b1e495cfde54da085e2addfaa0ec607603",
+    "C:\\Users\\24905\\Desktop\\Project\\LLM_Routing\\mmmu_test_sample\\runs\\sequential\\results.csv": "6c232e57a77915b9bc27a5e7ac725041eae60d10f11f56dbaa95497820b2cbbf",
+    "C:\\Users\\24905\\Desktop\\Project\\LLM_Routing\\mmmu_test_sample\\runs\\sequential\\attempts.jsonl": "83fa42956d1621aab892849c44aae9157c7219c2506ce745357fda8918639ede",
+    "C:\\Users\\24905\\Desktop\\Project\\LLM_Routing\\mmmu_test_sample\\runs\\sequential\\run_manifest.json": "93d3696cb5a4fe3b09b87eb3ab27458cc1368e25bad352960abfb584f5feeffa",
+    "C:\\Users\\24905\\Desktop\\Project\\LLM_Routing\\mmmu_test_sample\\runs\\sequential\\summary.json": "6d2c808157d2c790f541b03f05e11ab0d2942809dfe5e3cc29e42565b8bae4fc",
+    "C:\\Users\\24905\\Desktop\\Project\\LLM_Routing\\mmmu_test_sample\\additional_2000\\questions.jsonl": "7a4479759c61737dfd00c4504cb21dd4ccc5cc5dd9d32f565e560dc9473301d5",
+    "C:\\Users\\24905\\Desktop\\Project\\LLM_Routing\\mmmu_test_sample\\additional_2000\\dataset_manifest.json": "7ddfd063b6d8087f1d56f67be9d8c8e80b5dcc42be6874a2bae47591eba20179",
+    "C:\\Users\\24905\\Desktop\\Project\\LLM_Routing\\mmmu_test_sample\\additional_2000\\runs\\sequential\\results.csv": "8f45247506b8b4f6389c1359edf1f885be8b092df51c79b68b60981d9ca8f29b",
+    "C:\\Users\\24905\\Desktop\\Project\\LLM_Routing\\mmmu_test_sample\\additional_2000\\runs\\sequential\\attempts.jsonl": "50bdb4a472455f892fdb0ff1b8b524122cbdf3312266e44458b3eb8cc696e95f",
+    "C:\\Users\\24905\\Desktop\\Project\\LLM_Routing\\mmmu_test_sample\\additional_2000\\runs\\sequential\\run_manifest.json": "9ab06f173675ea9f2e4aa4a6edb040cca8f20b7cb146052527ecdc4958066300",
+    "C:\\Users\\24905\\Desktop\\Project\\LLM_Routing\\mmmu_test_sample\\additional_2000\\runs\\sequential\\summary.json": "608bb281bf310399bb9cf4ca501e27fea22865d5173d75a5bcec2d4d37a90ce7"
+  },
+  "scorer": "tag-first, option-aware deterministic MMMU-style v2 (not the official evaluator)",
+  "scorer_sha256": "f535e408cd169d5450ba6c25e82b34c66213b4c9a5b9f3560a8f25ee53eeb718",
+  "scorer_origin": "dev/bandit:bandit/data.py",
+  "independent_ft_ucb_decisions_verified": 12000,
+  "model_api_calls": 0,
+  "seed": 42,
+  "order_replays_per_threshold": 100,
+  "raw_missing_cost_count": 9,
+  "missing_cost_resolved_by_explicit_provider_no_charge": 9,
+  "deliverable_checks": {
+    "pdf_pages": 17,
+    "pdf_no_blank_pages": true,
+    "pdf_figures": 8,
+    "docx_zip_xml_valid": true,
+    "xlsx_zip_xml_valid": true,
+    "xlsx_sheets": 22,
+    "scored_rows_cross_checked": 12000,
+    "input_files_unchanged_at_completion": true
+  },
+  "deliverable_sha256": {
+    "MMMU_3000_Analysis.docx": "38c1b8eadd4489b04d6c47355cc82b57bd6dc403d4d4656637fc7f0141674524",
+    "MMMU_3000_Analysis.pdf": "235552ed4953ca6e758513637e60ad93f7c4700ad42094f8cf79960a8dd778ca",
+    "MMMU_3000_Analysis.html": "1358ce8867fe89d47bec29c8e85a1e50a9e3c2ffef6dab53712bf28494c7ba80",
+    "analysis_tables.xlsx": "53072d147c11a22fa1d4860007c51a70098dbaebd3c7ad193e8ac6dcfd53a52a"
+  }
+}
