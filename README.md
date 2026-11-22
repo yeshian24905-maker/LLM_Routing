@@ -13,3 +13,11 @@ python -m bandit --results-csv result.csv --scores-csv bandit/output/ft-ucb/scor
 The optional archive preserves verified saved labels for its 1000 questions; it does not limit the run to that subset. The remaining 2000 questions are scored against the raw CSV reference answers, with review flags for open responses and unresolved choice text. `mu0` controls the per-round UCB candidate set. The original MMMU folder mode is still available via `--data-dir`.
 
 The latest local 3000-question [report](bandit/output/ft-ucb-verified/report.md), [regret plot](bandit/output/ft-ucb-verified/regret.png), and [arm selection plot](bandit/output/ft-ucb-verified/arm_selections.png) are written to the separate verification directory. The archived 1000-question scores remain unchanged in `bandit/output/ft-ucb/`.
+
+Compare the original UCB with the three proposed confidence-bound changes:
+
+```powershell
+python -m bandit.compare --empirical-costs --repeats 30 --horizons 3000 10000
+```
+
+This tests tight UCB (`0.5 log(t)`), Bernoulli KL-UCB (`c=0`, with `c=3` as a sensitivity check), and LCB (the original radius with a minus sign). Each policy keeps the same cheapest-eligible-arm selection and uniform fallback. The 3000-round runs use every question once; 10000-round runs sample the same saved pool with replacement, with no new model calls. The command blocks network connections, writes paired results and primary-seed traces to `bandit/output/confidence-comparison/`, and exports [one English PDF](artifacts/Confidence_Methods_Comparison.pdf).

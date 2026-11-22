@@ -8,6 +8,32 @@
 
 ## 使用
 
+### 比较三种置信界改法
+
+```powershell
+python -m bandit.compare --empirical-costs --repeats 30 --horizons 3000 10000 --thresholds 0.89 0.85 0.80 0.825 --seed 42
+```
+
+保留原始 FT-UCB 作为基线，新增：
+
+- 收紧 UCB：`mean + sqrt(0.5 * ln(t) / n)`。
+- Bernoulli KL-UCB：求 `n * KL(mean, q) <= ln(t) + c * ln(ln(t))` 的最大 `q`；测试实用参数 `c=0`，并以 `c=3` 作敏感性对照。
+- LCB：仅把原始置信界的加号改成减号，`mean - sqrt(2 * ln(t) / n)`。
+
+所有方法仍然使用 `bound >= mu0` 的候选集合、最低成本选择、前四轮初始化以及候选集为空时的均匀随机回退。
+LCB 没有偷偷改成“总选最高准确率模型”。每个策略只用本轮选中模型的已有结果更新自身。
+
+3000 轮实验每题只使用一次；10000 轮实验从相同的 3000 道题中有放回抽样，**不是新增 10000 道题或新增模型回答**。
+所有方法共享每个种子的题目顺序和反馈评分，默认 30 组配对种子。均值、标准差和配对增益区间只反映这个固定数据集上的顺序/抽样随机性，不代表新题的泛化置信区间。
+
+该命令在运行期间阻断 socket 连接，不调用模型 API。输入 CSV 和归档评分保持不变。
+结果输出到 `bandit/output/confidence-comparison/`：`runs.csv`、`aggregates.csv`、每 50 轮的均值曲线 `curves.csv`、首个种子的完整逐轮记录 `primary_trace.csv` 以及溯源信息 `summary.json`。
+英文 PDF 输出到 `artifacts/Confidence_Methods_Comparison.pdf`；PDF 源代码使用 UTF-8，并嵌入字体。
+
+本比较不宣称修改后的成本约束策略自动继承原论文或标准最大化奖励 KL-UCB 的全部保证；这里只验证实现并报告离线表现。
+
+### 运行原始算法
+
 使用当前的完整 CSV，并复用其中已经归档、可核对的评分：
 
 ```powershell
