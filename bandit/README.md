@@ -4,7 +4,8 @@
 以当前 `results_3000.csv` 中的 **3000 道题、4 个模型（12000 条已有回答）**做离线回放，
 每道题先选一个模型，再读取该题该模型的已有回答；每个阈值独立运行 3000 轮。
 不调用模型 API。四个阈值为 **89%、85%、80%、82.5%**。
-需要 Python 3.10+ 和 Matplotlib。
+需要 Python 3.10+ 和 Matplotlib。依赖登记在项目根目录的 `pyproject.toml`；在根目录运行一次 `uv sync` 即可在 `.venv` 中建好环境。
+之后先激活 `.venv`，或在下面每条命令前加 `uv run`。
 
 ## 使用
 
@@ -53,7 +54,6 @@ python -m bandit --results-csv results_3000.csv --scores-csv bandit/output/ft-uc
 原始 MMMU 文件夹模式也保留；未指定 `--results-csv` 时默认读取项目根目录的 `mmmu_test_sample/`：
 
 ```powershell
-python -m pip install -r bandit/requirements.txt
 python -m bandit --empirical-costs
 ```
 

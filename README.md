@@ -4,6 +4,33 @@ FT-UCB routes all **3000 questions with four saved model outcomes each** in the 
 
 See the [bandit guide](bandit/README.md) for FT-UCB (paper Algorithm 6) at four feasibility thresholds, per-round routing logs, cost/quality regret, reports and plots. No model APIs are called.
 
+## Setup
+
+The project uses [uv](https://docs.astral.sh/uv/) to manage Python and the packages. `pyproject.toml` lists the dependencies, and `uv.lock` pins their versions. The code needs Python 3.10 or later. `.python-version` pins Python 3.15, so that every computer uses the same interpreter.
+
+Run all commands in the project root, which is the directory that contains this README and `pyproject.toml`. This also applies to the commands in the bandit guide.
+
+1. Install uv. Its [installation guide](https://docs.astral.sh/uv/getting-started/installation/) gives the command for each operating system.
+2. Run `uv sync`. This command creates `.venv` with Python 3.15 and all packages, or updates an existing `.venv`. If Python 3.15 is not on the computer, uv downloads it.
+3. Check the environment: `uv run python -m bandit --help` prints the usage of the command-line tool.
+
+The usage commands in this guide and in the [bandit guide](bandit/README.md) start with `python`. Run them in one of these two ways:
+
+- Put `uv run` before the command, for example `uv run python -m bandit --help`.
+- Activate the environment first, then type the command as shown. To activate, run `source .venv/bin/activate` on macOS and Linux, or `.venv\Scripts\Activate.ps1` in Windows PowerShell.
+
+Do not run the commands with the system `python3` of macOS. It is Python 3.9, which cannot import this code, and it does not have the packages.
+
+The code in `bandit/` needs only matplotlib. The `dev` group adds numpy, pandas and scipy for experiments. `uv sync` installs the `dev` group, and `uv sync --no-dev` does not. To add a package, run `uv add <package>`, or `uv add --dev <package>` for a package that only experiments use. Commit `pyproject.toml` and `uv.lock` together.
+
+Run the unit tests:
+
+```powershell
+python -m unittest discover -s bandit/tests
+```
+
+## Usage
+
 Run one 3000-round offline replay per threshold (89%, 85%, 80%, 82.5%):
 
 ```powershell

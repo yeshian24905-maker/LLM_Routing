@@ -108,7 +108,7 @@ def main(argv=None):
         report = make_ft_report(summary, runs)
         (args.output_dir / "report.md").write_text(report, encoding="utf-8")
     except ImportError as exc:
-        parser.error(f"Install plotting dependencies: python -m pip install -r bandit/requirements.txt ({exc})")
+        parser.error(f"Install dependencies with uv sync ({exc})")
     except (OSError, ValueError, csv.Error) as exc:
         parser.error(str(exc))
     print(report)
