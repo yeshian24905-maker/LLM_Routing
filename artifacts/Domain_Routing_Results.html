@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>body{margin:0}[hidden]{display:none!important}</style>
+<title>Domain Routing Results</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600&display=swap">
+<style>
+/* Layout: one reading column; findings, then a 2x2 grid of cost-accuracy panels, then tables and notes. */
+:root {
+  --bg: #f7f8fa; --surface: #ffffff; --ink: #17202b; --ink-2: #55606e; --ink-3: #8b94a1;
+  --rule: #dde1e7; --grid: #eceef2; --chip: #eef1f5;
+  --earlier: #257de0; --new: #f47230; --ablation: #00b894;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-head: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
+  --font-num: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #12161c; --surface: #191e26; --ink: #e9edf2; --ink-2: #a3acb8; --ink-3: #6f7987;
+  --rule: #2c333d; --grid: #232932; --chip: #232a34;
+  --earlier: #338ced; --new: #e76624; --ablation: #00a888; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #12161c; --surface: #191e26; --ink: #e9edf2; --ink-2: #a3acb8; --ink-3: #6f7987;
+  --rule: #2c333d; --grid: #232932; --chip: #232a34;
+  --earlier: #338ced; --new: #e76624; --ablation: #00a888; color-scheme: dark }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.55; }
+.wrap { max-width: 1120px; margin: 0 auto; padding-block: 40px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 40px; }
+.prose { max-width: 68ch; }
+h1, h2 { font-family: var(--font-head); font-weight: 600; text-wrap: balance; margin: 0; letter-spacing: -0.01em; }
+h1 { font-size: clamp(28px, 4.5vw, 40px); line-height: 1.1; }
+h2 { font-size: 22px; line-height: 1.2; }
+h3 { font-size: 15px; margin: 0; font-weight: 600; }
+p { margin: 0; }
+.eyebrow { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); font-weight: 500; }
+.stack { display: grid; gap: 12px; }
+.lead { color: var(--ink-2); font-size: 16px; }
+.num { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+.findings { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.finding { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 16px 18px; display: grid; gap: 6px; align-content: start; min-width: 0; }
+.finding .big { font-family: var(--font-num); font-size: 22px; font-weight: 500; line-height: 1.2; }
+.finding p { color: var(--ink-2); font-size: 14px; }
+.controls { display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: center; justify-content: space-between; }
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; background: var(--surface); }
+.seg button { font: inherit; font-size: 14px; border: 0; background: transparent; color: var(--ink-2); padding: 7px 14px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+.seg button:focus-visible { outline: 2px solid var(--earlier); outline-offset: -2px; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend svg { flex: none; }
+.panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 16px; }
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 14px 8px; min-width: 0; display: grid; gap: 4px; }
+.panel .sub { font-size: 13px; color: var(--ink-2); }
+.panel svg { width: 100%; height: auto; display: block; overflow: visible; }
+.axis text, .tick { font-family: var(--font-num); font-size: 10px; fill: var(--ink-3); }
+.axis-title { font-family: var(--font-body); font-size: 11px; fill: var(--ink-2); }
+.dlabel { font-family: var(--font-body); font-size: 11px; fill: var(--ink); paint-order: stroke; stroke: var(--surface); stroke-width: 3px; }
+.ref-label { font-family: var(--font-body); font-size: 10.5px; fill: var(--ink-2); paint-order: stroke; stroke: var(--surface); stroke-width: 3px; }
+.hit { fill: transparent; cursor: pointer; }
+.mark { transition: opacity .15s; }
+.tip { position: fixed; z-index: 20; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--rule);
+  border-radius: 6px; padding: 10px 12px; font-size: 13px; box-shadow: 0 6px 24px rgba(0,0,0,.12); max-width: 300px; display: grid; gap: 4px; }
+.tip .t { font-weight: 600; }
+.tip .d { color: var(--ink-2); font-size: 12px; }
+.tip .row { display: flex; justify-content: space-between; gap: 16px; }
+.tip .row span:last-child { font-family: var(--font-num); }
+.tablebox { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 720px; }
+th, td { padding: 8px 12px; text-align: right; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+thead th { font-weight: 600; color: var(--ink-2); font-size: 12px; letter-spacing: 0.03em; border-bottom: 1px solid var(--rule); vertical-align: bottom; }
+td.n { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+tr.group td { font-size: 12px; color: var(--ink-2); letter-spacing: 0.06em; text-transform: uppercase; padding-top: 14px; background: var(--chip); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; vertical-align: 1px; }
+.miss { color: var(--ink-3); }
+.ok { font-weight: 500; }
+.notes { display: grid; gap: 10px; color: var(--ink-2); font-size: 14px; padding-left: 18px; margin: 0; }
+.glossary { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 12px 32px; font-size: 14px; }
+.glossary div { display: grid; gap: 2px; min-width: 0; }
+.glossary b { font-weight: 600; }
+.glossary span { color: var(--ink-2); }
+@media (prefers-reduced-motion: reduce) { .mark { transition: none; } }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header class="stack prose">
+    <div class="eyebrow">LLM routing · offline replay of 3,000 MMMU questions</div>
+    <h1>Domain routing against the earlier bandits</h1>
+    <p class="lead">Every method picks one of four models per question and sees only that model's saved answer. The page puts the two new domain-aware policies, the FT confidence-bound variants, Greedy and ε-greedy on one cost–accuracy plane, next to the best routing that full knowledge of the answers would allow.</p>
+  </header>
+
+  <section class="findings" aria-label="Key findings">
+    <div class="finding"><div class="eyebrow">τ = 0.85, 10,000 rounds</div><div class="big">$1.24 vs $2.12</div>
+      <p>Domain TS (κ = 50) holds accuracy at 0.849 for $1.24 per 1,000 questions. FT KL-UCB, the only earlier method that reaches 0.85, overshoots to 0.870 and pays $2.12.</p></div>
+    <div class="finding"><div class="eyebrow">What the domain prior adds</div><div class="big">−18% to −20%</div>
+      <p>With the same λ mechanism, the domain prior cuts the cost at τ = 0.85 from $1.56 to $1.28 (κ = 20) or $1.24 (κ = 50) over 10,000 rounds. Over 3,000 rounds the saving is about 5%, at slightly lower accuracy.</p></div>
+    <div class="finding"><div class="eyebrow">Greedy and ε-greedy</div><div class="big">89.05% at $3.09</div>
+      <p>The best Greedy-type mean stays below fixed Gemini 3.8 Flash (89.63% at $2.91). Full knowledge per domain would buy 89.05% for $2.14.</p></div>
+    <div class="finding"><div class="eyebrow">Still open</div><div class="big">≈ 1.9× the optimum</div>
+      <p>At τ = 0.85 the per-domain optimum costs $0.67. At τ = 0.89 the domain policies stop at 0.879–0.883, below FT KL-UCB.</p></div>
+  </section>
+
+  <section class="stack">
+    <div class="controls">
+      <h2>Cost against accuracy</h2>
+      <div class="seg" role="group" aria-label="Number of rounds">
+        <button type="button" id="h3000" aria-pressed="false">3,000 rounds</button>
+        <button type="button" id="h10000" aria-pressed="true">10,000 rounds</button>
+      </div>
+    </div>
+    <div class="legend" id="legend"></div>
+    <div class="panels" id="panels"></div>
+    <p class="sub" style="color:var(--ink-2);font-size:13px">Each mark is the mean of 30 question orders; whiskers show ±1 SD across orders. Hover or tap a mark for its numbers. The solid line is the cheapest routing that knows every saved answer and may use a different model mix per subject; the dashed line may only use one mix for all questions. 10,000-round runs resample the same 3,000 questions.</p>
+  </section>
+
+  <section class="stack">
+    <h2 id="table-title">All numbers</h2>
+    <div class="tablebox"><table id="table"></table></div>
+    <p style="color:var(--ink-2);font-size:13px">Accuracy and cost in USD per 1,000 questions, means of 30 orders. Gray accuracy: more than 0.5 points below τ.</p>
+    <div class="tablebox"><table id="greedy"></table></div>
+    <p style="color:var(--ink-2);font-size:13px">Greedy and ε-greedy have no threshold: they aim for the highest accuracy. Their numbers come from the two PDF reports in <span class="num">artifacts/</span> and cover 3,000 rounds.</p>
+  </section>
+
+  <section class="stack">
+    <h2>The methods</h2>
+    <div class="glossary">
+      <div><b>FT-UCB family</b><span>Paper Algorithm 6: each round, take the cheapest model whose confidence bound is at least τ. Variants change only the bound: original Hoeffding, tight (0.5 ln t), Bernoulli KL (c = 0 or 3) and LCB.</span></div>
+      <div><b>KL-UCB per domain</b><span>One independent FT KL-UCB per subject, each held to the same τ. This asks every subject to reach τ, which the overall goal does not require.</span></div>
+      <div><b>Domain UCB (algorithm 1)</b><span>Per question, the model with the lowest normalized cost − λ × upper bound. A Beta prior centres each model's subject accuracy on its pooled accuracy with a weight of κ questions. λ grows with the cumulative shortfall below τ.</span></div>
+      <div><b>Domain TS (algorithm 2)</b><span>Same prior and λ, but the accuracy is a Thompson draw: first the model's pooled accuracy, then its subject accuracy.</span></div>
+      <div><b>No-domain ablation</b><span>The same two policies with κ = ∞, so every subject shares one estimate per model. The gap to the domain versions is the value of the subject label.</span></div>
+      <div><b>Greedy, ε-greedy</b><span>Warm-up calls, then the model with the highest estimated accuracy, with uniform exploration at rate ε. Rows are the best of 98 and 328 tested settings.</span></div>
+    </div>
+  </section>
+
+  <section class="stack prose">
+    <h2>Read with care</h2>
+    <ul class="notes">
+      <li>The FT and domain policies use each model's mean cost per call. The Greedy reports use the charge of each call, with 9 waived charges counted as zero. Both come from the same CSV, and Gemini costs $2.91 per 1,000 questions either way.</li>
+      <li>κ, η = 1 and β = 0.5 for the domain policies, and the best Greedy settings, were chosen on these same questions. The ε-greedy fresh-order check drops its best-below-Gemini setting from 89.05% to 88.63%.</li>
+      <li>The optimum lines use every saved answer of every model, which no online router sees. They are lower bounds on cost, not targets a router can reach.</li>
+      <li>The SDs measure sensitivity to question order on one fixed question set. They are not confidence intervals for new questions.</li>
+    </ul>
+  </section>
+</main>
+<div class="tip" id="tip" hidden></div>
+<script>window.ROUTING_DATA = {"fixed":[{"name":"Haiku 5.5","acc":0.8156666666666667,"cost":0.32594090000000003},{"name":"Sonnet 5.5","acc":0.869,"cost":4.5611506849315075},{"name":"Gemini 3.8 Flash","acc":0.8963333333333333,"cost":2.91378975},{"name":"GPT-5.6 Luna","acc":0.809,"cost":0.47605280186791193}],"frontiers":{"global":[[0.8155,0.3259],[0.816,0.3366],[0.8165,0.3527],[0.817,0.3687],[0.8175,0.3848],[0.818,0.4008],[0.8185,0.4168],[0.819,0.4329],[0.8195,0.4489],[0.82,0.465],[0.8205,0.481],[0.821,0.497],[0.8215,0.5131],[0.822,0.5291],[0.8225,0.5452],[0.823,0.5612],[0.8235,0.5772],[0.824,0.5933],[0.8245,0.6093],[0.825,0.6254],[0.8255,0.6414],[0.826,0.6574],[0.8265,0.6735],[0.827,0.6895],[0.8275,0.7056],[0.828,0.7216],[0.8285,0.7376],[0.829,0.7537],[0.8295,0.7697],[0.83,0.7858],[0.8305,0.8018],[0.831,0.8178],[0.8315,0.8339],[0.832,0.8499],[0.8325,0.866],[0.833,0.882],[0.8335,0.898],[0.834,0.9141],[0.8345,0.9301],[0.835,0.9462],[0.8355,0.9622],[0.836,0.9782],[0.8365,0.9943],[0.837,1.0103],[0.8375,1.0264],[0.838,1.0424],[0.8385,1.0585],[0.839,1.0745],[0.8395,1.0905],[0.84,1.1066],[0.8405,1.1226],[0.841,1.1387],[0.8415,1.1547],[0.842,1.1707],[0.8425,1.1868],[0.843,1.2028],[0.8435,1.2189],[0.844,1.2349],[0.8445,1.2509],[0.845,1.267],[0.8455,1.283],[0.846,1.2991],[0.8465,1.3151],[0.847,1.3311],[0.8475,1.3472],[0.848,1.3632],[0.8485,1.3793],[0.849,1.3953],[0.8495,1.4113],[0.85,1.4274],[0.8505,1.4434],[0.851,1.4595],[0.8515,1.4755],[0.852,1.4915],[0.8525,1.5076],[0.853,1.5236],[0.8535,1.5397],[0.854,1.5557],[0.8545,1.5717],[0.855,1.5878],[0.8555,1.6038],[0.856,1.6199],[0.8565,1.6359],[0.857,1.6519],[0.8575,1.668],[0.858,1.684],[0.8585,1.7001],[0.859,1.7161],[0.8595,1.7321],[0.86,1.7482],[0.8605,1.7642],[0.861,1.7803],[0.8615,1.7963],[0.862,1.8123],[0.8625,1.8284],[0.863,1.8444],[0.8635,1.8605],[0.864,1.8765],[0.8645,1.8926],[0.865,1.9086],[0.8655,1.9246],[0.866,1.9407],[0.8665,1.9567],[0.867,1.9728],[0.8675,1.9888],[0.868,2.0048],[0.8685,2.0209],[0.869,2.0369],[0.8695,2.053],[0.87,2.069],[0.8705,2.085],[0.871,2.1011],[0.8715,2.1171],[0.872,2.1332],[0.8725,2.1492],[0.873,2.1652],[0.8735,2.1813],[0.874,2.1973],[0.8745,2.2134],[0.875,2.2294],[0.8755,2.2454],[0.876,2.2615],[0.8765,2.2775],[0.877,2.2936],[0.8775,2.3096],[0.878,2.3256],[0.8785,2.3417],[0.879,2.3577],[0.8795,2.3738],[0.88,2.3898],[0.8805,2.4058],[0.881,2.4219],[0.8815,2.4379],[0.882,2.454],[0.8825,2.47],[0.883,2.486],[0.8835,2.5021],[0.884,2.5181],[0.8845,2.5342],[0.885,2.5502],[0.8855,2.5662],[0.886,2.5823],[0.8865,2.5983],[0.887,2.6144],[0.8875,2.6304],[0.888,2.6464],[0.8885,2.6625],[0.889,2.6785],[0.8895,2.6946],[0.89,2.7106],[0.8905,2.7267],[0.891,2.7427],[0.8915,2.7587],[0.892,2.7748],[0.8925,2.7908],[0.893,2.8069],[0.8935,2.8229],[0.894,2.8389],[0.8945,2.855],[0.895,2.871],[0.8955,2.8871],[0.896,2.9031]],"domain":[[0.8155,0.3259],[0.816,0.3264],[0.8165,0.3272],[0.817,0.3279],[0.8175,0.3287],[0.818,0.3294],[0.8185,0.3302],[0.819,0.3309],[0.8195,0.3322],[0.82,0.3334],[0.8205,0.3347],[0.821,0.3359],[0.8215,0.3374],[0.822,0.339],[0.8225,0.3405],[0.823,0.342],[0.8235,0.3435],[0.824,0.345],[0.8245,0.3466],[0.825,0.3485],[0.8255,0.3503],[0.826,0.3522],[0.8265,0.3541],[0.827,0.356],[0.8275,0.3578],[0.828,0.3597],[0.8285,0.3616],[0.829,0.3635],[0.8295,0.3653],[0.83,0.3708],[0.8305,0.378],[0.831,0.3851],[0.8315,0.3923],[0.832,0.3995],[0.8325,0.4067],[0.833,0.4139],[0.8335,0.4211],[0.834,0.4283],[0.8345,0.4355],[0.835,0.4426],[0.8355,0.4498],[0.836,0.457],[0.8365,0.4642],[0.837,0.4714],[0.8375,0.4786],[0.838,0.4858],[0.8385,0.493],[0.839,0.5002],[0.8395,0.5073],[0.84,0.5145],[0.8405,0.5217],[0.841,0.5289],[0.8415,0.5361],[0.842,0.5435],[0.8425,0.5511],[0.843,0.5587],[0.8435,0.5664],[0.844,0.574],[0.8445,0.5816],[0.845,0.5892],[0.8455,0.5968],[0.846,0.6044],[0.8465,0.6121],[0.847,0.6197],[0.8475,0.6279],[0.848,0.6373],[0.8485,0.6466],[0.849,0.656],[0.8495,0.6654],[0.85,0.6748],[0.8505,0.6841],[0.851,0.6935],[0.8515,0.7029],[0.852,0.7139],[0.8525,0.7256],[0.853,0.7374],[0.8535,0.7491],[0.854,0.7609],[0.8545,0.7727],[0.855,0.7844],[0.8555,0.7966],[0.856,0.8095],[0.8565,0.8225],[0.857,0.8354],[0.8575,0.8483],[0.858,0.8613],[0.8585,0.8742],[0.859,0.8876],[0.8595,0.9011],[0.86,0.9147],[0.8605,0.9282],[0.861,0.9417],[0.8615,0.9553],[0.862,0.9694],[0.8625,0.9838],[0.863,0.9981],[0.8635,1.0125],[0.864,1.0269],[0.8645,1.0413],[0.865,1.0556],[0.8655,1.07],[0.866,1.0844],[0.8665,1.0988],[0.867,1.1131],[0.8675,1.1275],[0.868,1.1425],[0.8685,1.1577],[0.869,1.1729],[0.8695,1.1882],[0.87,1.2034],[0.8705,1.219],[0.871,1.2351],[0.8715,1.2513],[0.872,1.2675],[0.8725,1.2837],[0.873,1.2998],[0.8735,1.3183],[0.874,1.3368],[0.8745,1.3553],[0.875,1.3738],[0.8755,1.3923],[0.876,1.4107],[0.8765,1.4292],[0.877,1.4477],[0.8775,1.4662],[0.878,1.4859],[0.8785,1.5062],[0.879,1.5265],[0.8795,1.5468],[0.88,1.5672],[0.8805,1.5875],[0.881,1.6078],[0.8815,1.6281],[0.882,1.6493],[0.8825,1.6708],[0.883,1.6924],[0.8835,1.7139],[0.884,1.7384],[0.8845,1.7643],[0.885,1.7901],[0.8855,1.8176],[0.886,1.848],[0.8865,1.8785],[0.887,1.9102],[0.8875,1.9426],[0.888,1.9749],[0.8885,2.0073],[0.889,2.0396],[0.8895,2.072],[0.89,2.1043],[0.8905,2.1367],[0.891,2.1745],[0.8915,2.2152],[0.892,2.2558],[0.8925,2.2964],[0.893,2.3382],[0.8935,2.3805],[0.894,2.4229],[0.8945,2.4655],[0.895,2.5086],[0.8955,2.5518],[0.896,2.5949],[0.8965,2.6452],[0.897,2.7099],[0.8975,2.7923],[0.898,2.8747],[0.8985,2.9805]]},"runs":[{"id":"ucb_original","label":"FT-UCB (original)","family":"earlier","desc":"Paper Algorithm 6, Hoeffding radius sqrt(2 ln t / n)","horizon":3000,"tau":0.89,"acc":0.8148555555555556,"accSd":0.0018686429057119753,"cost":0.3382127055427276,"costSd":0.005740753828055721},{"id":"ucb_tight","label":"FT tight UCB","family":"earlier","desc":"Radius sqrt(0.5 ln t / n)","horizon":3000,"tau":0.89,"acc":0.8604222222222222,"accSd":0.007061271706274592,"cost":1.8421620096265128,"costSd":0.28877669913094656},{"id":"kl_ucb","label":"FT KL-UCB","family":"earlier","desc":"Bernoulli KL bound, c = 0","horizon":3000,"tau":0.89,"acc":0.8793333333333333,"accSd":0.0043151697133684665,"cost":2.405808082649214,"costSd":0.14073530721984412},{"id":"kl_ucb_c3","label":"FT KL-UCB c=3","family":"earlier","desc":"Bernoulli KL bound, c = 3","horizon":3000,"tau":0.89,"acc":0.8665444444444445,"accSd":0.005001519564750033,"cost":2.039911282871749,"costSd":0.20251038138165922},{"id":"lcb","label":"FT LCB","family":"earlier","desc":"Lower confidence bound","horizon":3000,"tau":0.89,"acc":0.8481333333333333,"accSd":0.004484626784319513,"cost":2.0633187505759265,"costSd":0.02821032359705799},{"id":"ucb_original","label":"FT-UCB (original)","family":"earlier","desc":"Paper Algorithm 6, Hoeffding radius sqrt(2 ln t / n)","horizon":3000,"tau":0.85,"acc":0.815711111111111,"accSd":0.00016913875446828965,"cost":0.3282652901789503,"costSd":0.0},{"id":"ucb_tight","label":"FT tight UCB","family":"earlier","desc":"Radius sqrt(0.5 ln t / n)","horizon":3000,"tau":0.85,"acc":0.8152555555555555,"accSd":0.001463956046210491,"cost":0.33284203527589945,"costSd":0.012004376986747738},{"id":"kl_ucb","label":"FT KL-UCB","family":"earlier","desc":"Bernoulli KL bound, c = 0","horizon":3000,"tau":0.85,"acc":0.8196555555555556,"accSd":0.00652756215507582,"cost":0.5984814650055964,"costSd":0.24109163775036618},{"id":"kl_ucb_c3","label":"FT KL-UCB c=3","family":"earlier","desc":"Bernoulli KL bound, c = 3","horizon":3000,"tau":0.85,"acc":0.8150555555555555,"accSd":0.0017962995878891598,"cost":0.3340979715215272,"costSd":0.013551823795852331},{"id":"lcb","label":"FT LCB","family":"earlier","desc":"Lower confidence bound","horizon":3000,"tau":0.85,"acc":0.8481333333333333,"accSd":0.004484626784319513,"cost":2.0633187505759265,"costSd":0.02821032359705799},{"id":"ucb_original","label":"FT-UCB (original)","family":"earlier","desc":"Paper Algorithm 6, Hoeffding radius sqrt(2 ln t / n)","horizon":3000,"tau":0.8,"acc":0.815711111111111,"accSd":0.00016913875446828965,"cost":0.3282652901789503,"costSd":0.0},{"id":"ucb_tight","label":"FT tight UCB","family":"earlier","desc":"Radius sqrt(0.5 ln t / n)","horizon":3000,"tau":0.8,"acc":0.815711111111111,"accSd":0.00016913875446828965,"cost":0.3282652901789503,"costSd":0.0},{"id":"kl_ucb","label":"FT KL-UCB","family":"earlier","desc":"Bernoulli KL bound, c = 0","horizon":3000,"tau":0.8,"acc":0.815711111111111,"accSd":0.00016913875446828965,"cost":0.3283069879294691,"costSd":0.00018211877204066002},{"id":"kl_ucb_c3","label":"FT KL-UCB c=3","family":"earlier","desc":"Bernoulli KL bound, c = 3","horizon":3000,"tau":0.8,"acc":0.815711111111111,"accSd":0.00016913875446828965,"cost":0.3282652901789503,"costSd":0.0},{"id":"lcb","label":"FT LCB","family":"earlier","desc":"Lower confidence bound","horizon":3000,"tau":0.8,"acc":0.8481333333333333,"accSd":0.004484626784319513,"cost":2.0633187505759265,"costSd":0.02821032359705799},{"id":"ucb_original","label":"FT-UCB (original)","family":"earlier","desc":"Paper Algorithm 6, Hoeffding radius sqrt(2 ln t / n)","horizon":3000,"tau":0.825,"acc":0.815711111111111,"accSd":0.00016913875446828965,"cost":0.3282652901789503,"costSd":0.0},{"id":"ucb_tight","label":"FT tight UCB","family":"earlier","desc":"Radius sqrt(0.5 ln t / n)","horizon":3000,"tau":0.825,"acc":0.815711111111111,"accSd":0.00016913875446828965,"cost":0.3282652901789503,"costSd":0.0},{"id":"kl_ucb","label":"FT KL-UCB","family":"earlier","desc":"Bernoulli KL bound, c = 0","horizon":3000,"tau":0.825,"acc":0.8157222222222222,"accSd":0.00019736449997224343,"cost":0.3285972042730805,"costSd":0.0016433684933420446},{"id":"kl_ucb_c3","label":"FT KL-UCB c=3","family":"earlier","desc":"Bernoulli KL bound, c = 3","horizon":3000,"tau":0.825,"acc":0.815711111111111,"accSd":0.00016913875446828965,"cost":0.3282652901789503,"costSd":0.0},{"id":"lcb","label":"FT LCB","family":"earlier","desc":"Lower confidence bound","horizon":3000,"tau":0.825,"acc":0.8481333333333333,"accSd":0.004484626784319513,"cost":2.0633187505759265,"costSd":0.02821032359705799},{"id":"ucb_original","label":"FT-UCB (original)","family":"earlier","desc":"Paper Algorithm 6, Hoeffding radius sqrt(2 ln t / n)","horizon":10000,"tau":0.89,"acc":0.84621,"accSd":0.0031919456827112945,"cost":1.407326118711122,"costSd":0.14966498835484005},{"id":"ucb_tight","label":"FT tight UCB","family":"earlier","desc":"Radius sqrt(0.5 ln t / n)","horizon":10000,"tau":0.89,"acc":0.88419,"accSd":0.0026226270062273487,"cost":2.5620165469456,"costSd":0.07988579116728786},{"id":"kl_ucb","label":"FT KL-UCB","family":"earlier","desc":"Bernoulli KL bound, c = 0","horizon":10000,"tau":0.89,"acc":0.89094,"accSd":0.002479377007400771,"cost":2.758189425890837,"costSd":0.057255431711909034},{"id":"kl_ucb_c3","label":"FT KL-UCB c=3","family":"earlier","desc":"Bernoulli KL bound, c = 3","horizon":10000,"tau":0.89,"acc":0.8865266666666667,"accSd":0.0025945477758020745,"cost":2.6379654170355273,"costSd":0.08470940106563099},{"id":"lcb","label":"FT LCB","family":"earlier","desc":"Lower confidence bound","horizon":10000,"tau":0.89,"acc":0.8471533333333333,"accSd":0.0030699582534882974,"cost":2.0663252575863003,"costSd":0.019462099685339525},{"id":"ucb_original","label":"FT-UCB (original)","family":"earlier","desc":"Paper Algorithm 6, Hoeffding radius sqrt(2 ln t / n)","horizon":10000,"tau":0.85,"acc":0.8156033333333333,"accSd":0.0025995335567450765,"cost":0.3266382170536292,"costSd":0.0},{"id":"ucb_tight","label":"FT tight UCB","family":"earlier","desc":"Radius sqrt(0.5 ln t / n)","horizon":10000,"tau":0.85,"acc":0.8433033333333333,"accSd":0.00869520213852933,"cost":1.307072040602315,"costSd":0.33098251120375727},{"id":"kl_ucb","label":"FT KL-UCB","family":"earlier","desc":"Bernoulli KL bound, c = 0","horizon":10000,"tau":0.85,"acc":0.86971,"accSd":0.006352862509842757,"cost":2.117001078132954,"costSd":0.21829920893618948},{"id":"kl_ucb_c3","label":"FT KL-UCB c=3","family":"earlier","desc":"Bernoulli KL bound, c = 3","horizon":10000,"tau":0.85,"acc":0.8467366666666667,"accSd":0.007743183134697982,"cost":1.408566250507267,"costSd":0.29543714074825395},{"id":"lcb","label":"FT LCB","family":"earlier","desc":"Lower confidence bound","horizon":10000,"tau":0.85,"acc":0.8471533333333333,"accSd":0.0030699582534882974,"cost":2.0663252575863003,"costSd":0.019462099685339525},{"id":"ucb_original","label":"FT-UCB (original)","family":"earlier","desc":"Paper Algorithm 6, Hoeffding radius sqrt(2 ln t / n)","horizon":10000,"tau":0.8,"acc":0.8156033333333333,"accSd":0.0025995335567450765,"cost":0.3266382170536292,"costSd":0.0},{"id":"ucb_tight","label":"FT tight UCB","family":"earlier","desc":"Radius sqrt(0.5 ln t / n)","horizon":10000,"tau":0.8,"acc":0.8156033333333333,"accSd":0.0025995335567450765,"cost":0.3266382170536292,"costSd":0.0},{"id":"kl_ucb","label":"FT KL-UCB","family":"earlier","desc":"Bernoulli KL bound, c = 0","horizon":10000,"tau":0.8,"acc":0.8156033333333333,"accSd":0.0026054959595828106,"cost":0.3267814435551374,"costSd":0.00044859915251223916},{"id":"kl_ucb_c3","label":"FT KL-UCB c=3","family":"earlier","desc":"Bernoulli KL bound, c = 3","horizon":10000,"tau":0.8,"acc":0.8156033333333333,"accSd":0.0025995335567450765,"cost":0.3266382170536292,"costSd":0.0},{"id":"lcb","label":"FT LCB","family":"earlier","desc":"Lower confidence bound","horizon":10000,"tau":0.8,"acc":0.8592766666666667,"accSd":0.00676143645895646,"cost":2.2713510147873497,"costSd":0.07539248013579025},{"id":"ucb_original","label":"FT-UCB (original)","family":"earlier","desc":"Paper Algorithm 6, Hoeffding radius sqrt(2 ln t / n)","horizon":10000,"tau":0.825,"acc":0.8156033333333333,"accSd":0.0025995335567450765,"cost":0.3266382170536292,"costSd":0.0},{"id":"ucb_tight","label":"FT tight UCB","family":"earlier","desc":"Radius sqrt(0.5 ln t / n)","horizon":10000,"tau":0.825,"acc":0.8156033333333333,"accSd":0.0025995335567450765,"cost":0.3266382170536292,"costSd":0.0},{"id":"kl_ucb","label":"FT KL-UCB","family":"earlier","desc":"Bernoulli KL bound, c = 0","horizon":10000,"tau":0.825,"acc":0.8156233333333334,"accSd":0.0026097540290138596,"cost":0.3268795166643577,"costSd":0.0008471656974587547},{"id":"kl_ucb_c3","label":"FT KL-UCB c=3","family":"earlier","desc":"Bernoulli KL bound, c = 3","horizon":10000,"tau":0.825,"acc":0.8156033333333333,"accSd":0.0025995335567450765,"cost":0.3266382170536292,"costSd":0.0},{"id":"lcb","label":"FT LCB","family":"earlier","desc":"Lower confidence bound","horizon":10000,"tau":0.825,"acc":0.8471533333333333,"accSd":0.0030699582534882974,"cost":2.066365531784061,"costSd":0.019440949445027993},{"id":"ft_kl_ucb_per_domain","label":"KL-UCB per domain","family":"earlier","desc":"One FT KL-UCB per subject, each with the same threshold","horizon":3000,"tau":0.89,"acc":0.8267666666666666,"accSd":0.0027391723447237975,"cost":0.6544931513214999,"costSd":0.04202073848595383,"meet":0.0},{"id":"pd_kinf_eta1_beta0.5","label":"Primal-dual UCB, no domains","family":"ablation","desc":"New lambda mechanism, kappa = inf","horizon":3000,"tau":0.89,"acc":0.8784444444444445,"accSd":0.01951113903942005,"cost":2.589149787008276,"costSd":0.6623482728432672,"meet":0.0},{"id":"ts_kinf_eta1","label":"Primal-dual TS, no domains","family":"ablation","desc":"New lambda mechanism, kappa = inf, Thompson sampling","horizon":3000,"tau":0.89,"acc":0.8826222222222222,"accSd":0.0033684737762224577,"cost":2.665002363420814,"costSd":0.13980674672205615,"meet":0.0},{"id":"pd_k20_eta1_beta0.5","label":"Domain UCB \u03ba=20","family":"new","desc":"Algorithm 1: domain prior kappa = 20, UCB","horizon":3000,"tau":0.89,"acc":0.8669555555555556,"accSd":0.011764852301695727,"cost":2.4844219431692975,"costSd":0.32631658240374767,"meet":0.0},{"id":"ts_k20_eta1","label":"Domain TS \u03ba=20","family":"new","desc":"Algorithm 2: domain prior kappa = 20, Thompson sampling","horizon":3000,"tau":0.89,"acc":0.8643111111111111,"accSd":0.005491849295505715,"cost":2.398220465282429,"costSd":0.21076977416500625,"meet":0.0},{"id":"ts_k50_eta1","label":"Domain TS \u03ba=50","family":"new","desc":"Algorithm 2: domain prior kappa = 50, Thompson sampling","horizon":3000,"tau":0.89,"acc":0.8726333333333334,"accSd":0.006009794049805103,"cost":2.570149428309006,"costSd":0.2612241981387433,"meet":0.0},{"id":"ft_kl_ucb_per_domain","label":"KL-UCB per domain","family":"earlier","desc":"One FT KL-UCB per subject, each with the same threshold","horizon":3000,"tau":0.85,"acc":0.8234333333333334,"accSd":0.002307990451317262,"cost":0.5340029906430996,"costSd":0.03422286751374166,"meet":0.0},{"id":"pd_kinf_eta1_beta0.5","label":"Primal-dual UCB, no domains","family":"ablation","desc":"New lambda mechanism, kappa = inf","horizon":3000,"tau":0.85,"acc":0.8417888888888889,"accSd":0.013393966541657084,"cost":1.5134628046173346,"costSd":0.5805593402986584,"meet":0.03333333333333333},{"id":"ts_kinf_eta1","label":"Primal-dual TS, no domains","family":"ablation","desc":"New lambda mechanism, kappa = inf, Thompson sampling","horizon":3000,"tau":0.85,"acc":0.8477666666666667,"accSd":0.0009061306732115728,"cost":1.5600641127846782,"costSd":0.23180286266194045,"meet":0.03333333333333333},{"id":"pd_k20_eta1_beta0.5","label":"Domain UCB \u03ba=20","family":"new","desc":"Algorithm 1: domain prior kappa = 20, UCB","horizon":3000,"tau":0.85,"acc":0.8440444444444445,"accSd":0.006819924232640184,"cost":1.4177312691149504,"costSd":0.31654968126242466,"meet":0.0},{"id":"ts_k20_eta1","label":"Domain TS \u03ba=20","family":"new","desc":"Algorithm 2: domain prior kappa = 20, Thompson sampling","horizon":3000,"tau":0.85,"acc":0.8462444444444445,"accSd":0.0019375960405480248,"cost":1.481329118121584,"costSd":0.16438801074927303,"meet":0.03333333333333333},{"id":"ts_k50_eta1","label":"Domain TS \u03ba=50","family":"new","desc":"Algorithm 2: domain prior kappa = 50, Thompson sampling","horizon":3000,"tau":0.85,"acc":0.8469333333333333,"accSd":0.0017991057804352174,"cost":1.514581905960225,"costSd":0.18462789227873158,"meet":0.03333333333333333},{"id":"ft_kl_ucb_per_domain","label":"KL-UCB per domain","family":"earlier","desc":"One FT KL-UCB per subject, each with the same threshold","horizon":3000,"tau":0.8,"acc":0.8212444444444444,"accSd":0.002091642433954667,"cost":0.47484351136864855,"costSd":0.03204813642986587,"meet":1.0},{"id":"pd_kinf_eta1_beta0.5","label":"Primal-dual UCB, no domains","family":"ablation","desc":"New lambda mechanism, kappa = inf","horizon":3000,"tau":0.8,"acc":0.8153222222222222,"accSd":0.0009242718303331489,"cost":0.34405206282857936,"costSd":0.031159789945293125,"meet":1.0},{"id":"ts_kinf_eta1","label":"Primal-dual TS, no domains","family":"ablation","desc":"New lambda mechanism, kappa = inf, Thompson sampling","horizon":3000,"tau":0.8,"acc":0.8156888888888889,"accSd":0.0006428703195552017,"cost":0.32966403574348707,"costSd":0.007460301034377077,"meet":1.0},{"id":"pd_k20_eta1_beta0.5","label":"Domain UCB \u03ba=20","family":"new","desc":"Algorithm 1: domain prior kappa = 20, UCB","horizon":3000,"tau":0.8,"acc":0.8154,"accSd":0.000999616784810604,"cost":0.33239780808925506,"costSd":0.013894055374743563,"meet":1.0},{"id":"ts_k20_eta1","label":"Domain TS \u03ba=20","family":"new","desc":"Algorithm 2: domain prior kappa = 20, Thompson sampling","horizon":3000,"tau":0.8,"acc":0.8154555555555556,"accSd":0.0010375454874701102,"cost":0.3337058977803194,"costSd":0.01488328582083167,"meet":1.0},{"id":"ts_k50_eta1","label":"Domain TS \u03ba=50","family":"new","desc":"Algorithm 2: domain prior kappa = 50, Thompson sampling","horizon":3000,"tau":0.8,"acc":0.8154111111111111,"accSd":0.0007764904507969098,"cost":0.3358248836311333,"costSd":0.03078561890707307,"meet":1.0},{"id":"ft_kl_ucb_per_domain","label":"KL-UCB per domain","family":"earlier","desc":"One FT KL-UCB per subject, each with the same threshold","horizon":3000,"tau":0.825,"acc":0.8218,"accSd":0.0025198065972126403,"cost":0.5002458160768269,"costSd":0.029223927898737817,"meet":0.06666666666666667},{"id":"pd_kinf_eta1_beta0.5","label":"Primal-dual UCB, no domains","family":"ablation","desc":"New lambda mechanism, kappa = inf","horizon":3000,"tau":0.825,"acc":0.8228555555555556,"accSd":0.003905672594617652,"cost":0.7124055110247796,"costSd":0.18148926913473043,"meet":0.2},{"id":"ts_kinf_eta1","label":"Primal-dual TS, no domains","family":"ablation","desc":"New lambda mechanism, kappa = inf, Thompson sampling","horizon":3000,"tau":0.825,"acc":0.8240111111111111,"accSd":0.0016152608731650894,"cost":0.7051048561558922,"costSd":0.1329133654873855,"meet":0.2},{"id":"pd_k20_eta1_beta0.5","label":"Domain UCB \u03ba=20","family":"new","desc":"Algorithm 1: domain prior kappa = 20, UCB","horizon":3000,"tau":0.825,"acc":0.8242222222222222,"accSd":0.0015018081906937064,"cost":0.6377384620432648,"costSd":0.10187699712139459,"meet":0.23333333333333334},{"id":"ts_k20_eta1","label":"Domain TS \u03ba=20","family":"new","desc":"Algorithm 2: domain prior kappa = 20, Thompson sampling","horizon":3000,"tau":0.825,"acc":0.8240666666666666,"accSd":0.0019146541157978863,"cost":0.6696455648253926,"costSd":0.1524533673586524,"meet":0.3},{"id":"ts_k50_eta1","label":"Domain TS \u03ba=50","family":"new","desc":"Algorithm 2: domain prior kappa = 50, Thompson sampling","horizon":3000,"tau":0.825,"acc":0.8240222222222222,"accSd":0.0016515018900914817,"cost":0.6971437204990217,"costSd":0.13231056396945715,"meet":0.2},{"id":"ft_kl_ucb_per_domain","label":"KL-UCB per domain","family":"earlier","desc":"One FT KL-UCB per subject, each with the same threshold","horizon":10000,"tau":0.89,"acc":0.8398366666666667,"accSd":0.003206510976696966,"cost":0.8955797801279296,"costSd":0.06577705530470496,"meet":0.0},{"id":"pd_kinf_eta1_beta0.5","label":"Primal-dual UCB, no domains","family":"ablation","desc":"New lambda mechanism, kappa = inf","horizon":10000,"tau":0.89,"acc":0.8862733333333334,"accSd":0.006362331676973152,"cost":2.929934323407592,"costSd":0.5270903262274172,"meet":0.0},{"id":"ts_kinf_eta1","label":"Primal-dual TS, no domains","family":"ablation","desc":"New lambda mechanism, kappa = inf, Thompson sampling","horizon":10000,"tau":0.89,"acc":0.8881333333333333,"accSd":0.0017952683659406279,"cost":2.7571861987122572,"costSd":0.08294287332723202,"meet":0.0},{"id":"pd_k20_eta1_beta0.5","label":"Domain UCB \u03ba=20","family":"new","desc":"Algorithm 1: domain prior kappa = 20, UCB","horizon":10000,"tau":0.89,"acc":0.8797033333333333,"accSd":0.008048237473930658,"cost":2.775047059925548,"costSd":0.29001775181408573,"meet":0.0},{"id":"ts_k20_eta1","label":"Domain TS \u03ba=20","family":"new","desc":"Algorithm 2: domain prior kappa = 20, Thompson sampling","horizon":10000,"tau":0.89,"acc":0.8789066666666667,"accSd":0.003314225694490789,"cost":2.7497539440359446,"costSd":0.18795942560089943,"meet":0.0},{"id":"ts_k50_eta1","label":"Domain TS \u03ba=50","family":"new","desc":"Algorithm 2: domain prior kappa = 50, Thompson sampling","horizon":10000,"tau":0.89,"acc":0.8829566666666667,"accSd":0.0032762134717755635,"cost":2.7940267972865716,"costSd":0.17257966420107082,"meet":0.0},{"id":"ft_kl_ucb_per_domain","label":"KL-UCB per domain","family":"earlier","desc":"One FT KL-UCB per subject, each with the same threshold","horizon":10000,"tau":0.85,"acc":0.83153,"accSd":0.003269203214113865,"cost":0.6497942925450206,"costSd":0.04656709131148037,"meet":0.0},{"id":"pd_kinf_eta1_beta0.5","label":"Primal-dual UCB, no domains","family":"ablation","desc":"New lambda mechanism, kappa = inf","horizon":10000,"tau":0.85,"acc":0.8492500000000001,"accSd":0.0004305169306615113,"cost":1.5962924794419768,"costSd":0.4081126893223908,"meet":0.0},{"id":"ts_kinf_eta1","label":"Primal-dual TS, no domains","family":"ablation","desc":"New lambda mechanism, kappa = inf, Thompson sampling","horizon":10000,"tau":0.85,"acc":0.8493,"accSd":0.0003028599312075436,"cost":1.5617887438295033,"costSd":0.31884387121211344,"meet":0.03333333333333333},{"id":"pd_k20_eta1_beta0.5","label":"Domain UCB \u03ba=20","family":"new","desc":"Algorithm 1: domain prior kappa = 20, UCB","horizon":10000,"tau":0.85,"acc":0.84872,"accSd":0.0024994344187822017,"cost":1.3161724246166053,"costSd":0.29137434368266535,"meet":0.03333333333333333},{"id":"ts_k20_eta1","label":"Domain TS \u03ba=20","family":"new","desc":"Algorithm 2: domain prior kappa = 20, Thompson sampling","horizon":10000,"tau":0.85,"acc":0.8492866666666666,"accSd":0.00031043166090455153,"cost":1.2799922593410133,"costSd":0.12722980152922617,"meet":0.0},{"id":"ts_k50_eta1","label":"Domain TS \u03ba=50","family":"new","desc":"Algorithm 2: domain prior kappa = 50, Thompson sampling","horizon":10000,"tau":0.85,"acc":0.8493166666666667,"accSd":0.0003291402943021938,"cost":1.2407808761944978,"costSd":0.09926270370947948,"meet":0.03333333333333333},{"id":"ft_kl_ucb_per_domain","label":"KL-UCB per domain","family":"earlier","desc":"One FT KL-UCB per subject, each with the same threshold","horizon":10000,"tau":0.8,"acc":0.82623,"accSd":0.0027618272312315896,"cost":0.5022188715339321,"costSd":0.0453222986802797,"meet":1.0},{"id":"pd_kinf_eta1_beta0.5","label":"Primal-dual UCB, no domains","family":"ablation","desc":"New lambda mechanism, kappa = inf","horizon":10000,"tau":0.8,"acc":0.8158033333333333,"accSd":0.0026111806463391457,"cost":0.3348789973899516,"costSd":0.011881281089706177,"meet":1.0},{"id":"ts_kinf_eta1","label":"Primal-dual TS, no domains","family":"ablation","desc":"New lambda mechanism, kappa = inf, Thompson sampling","horizon":10000,"tau":0.8,"acc":0.8158066666666667,"accSd":0.0026011845223936464,"cost":0.33296452880581856,"costSd":0.011427082188792856,"meet":1.0},{"id":"pd_k20_eta1_beta0.5","label":"Domain UCB \u03ba=20","family":"new","desc":"Algorithm 1: domain prior kappa = 20, UCB","horizon":10000,"tau":0.8,"acc":0.8157266666666667,"accSd":0.002622966645420518,"cost":0.33275972268067705,"costSd":0.013244805969925881,"meet":1.0},{"id":"ts_k20_eta1","label":"Domain TS \u03ba=20","family":"new","desc":"Algorithm 2: domain prior kappa = 20, Thompson sampling","horizon":10000,"tau":0.8,"acc":0.8157,"accSd":0.002627310149314245,"cost":0.33697710807180176,"costSd":0.015307770125371628,"meet":1.0},{"id":"ts_k50_eta1","label":"Domain TS \u03ba=50","family":"new","desc":"Algorithm 2: domain prior kappa = 50, Thompson sampling","horizon":10000,"tau":0.8,"acc":0.81574,"accSd":0.002566709956344876,"cost":0.3365920947264366,"costSd":0.01682745921673219,"meet":1.0},{"id":"ft_kl_ucb_per_domain","label":"KL-UCB per domain","family":"earlier","desc":"One FT KL-UCB per subject, each with the same threshold","horizon":10000,"tau":0.825,"acc":0.8287133333333333,"accSd":0.0031442046670828775,"cost":0.5690703940648681,"costSd":0.04558345046371437,"meet":0.9},{"id":"pd_kinf_eta1_beta0.5","label":"Primal-dual UCB, no domains","family":"ablation","desc":"New lambda mechanism, kappa = inf","horizon":10000,"tau":0.825,"acc":0.8249033333333333,"accSd":0.0009689963998841725,"cost":0.7567217679299912,"costSd":0.2109286588567598,"meet":0.3333333333333333},{"id":"ts_kinf_eta1","label":"Primal-dual TS, no domains","family":"ablation","desc":"New lambda mechanism, kappa = inf, Thompson sampling","horizon":10000,"tau":0.825,"acc":0.8249133333333334,"accSd":0.0007523449930090145,"cost":0.7093463238621092,"costSd":0.0964633544217167,"meet":0.4},{"id":"pd_k20_eta1_beta0.5","label":"Domain UCB \u03ba=20","family":"new","desc":"Algorithm 1: domain prior kappa = 20, UCB","horizon":10000,"tau":0.825,"acc":0.8253199999999999,"accSd":0.0008252063482798519,"cost":0.5670131968705668,"costSd":0.10317478914353853,"meet":0.6333333333333333},{"id":"ts_k20_eta1","label":"Domain TS \u03ba=20","family":"new","desc":"Algorithm 2: domain prior kappa = 20, Thompson sampling","horizon":10000,"tau":0.825,"acc":0.8252033333333333,"accSd":0.0008372711559021574,"cost":0.5663782312542625,"costSd":0.0653956407042175,"meet":0.5666666666666667},{"id":"ts_k50_eta1","label":"Domain TS \u03ba=50","family":"new","desc":"Algorithm 2: domain prior kappa = 50, Thompson sampling","horizon":10000,"tau":0.825,"acc":0.8251233333333333,"accSd":0.0008508346139114651,"cost":0.5767029846841053,"costSd":0.058944541456009615,"meet":0.4666666666666667}],"greedy":[{"label":"Pure Greedy","acc":0.86229,"cost":2.673133333333333,"desc":"1 warmup call per model, then the highest accuracy estimate","family":"earlier"},{"label":"Greedy, best global mean","acc":0.8884,"cost":3.1085333333333334,"desc":"48 warmup calls per model, global estimate","family":"earlier"},{"label":"Greedy, topic and format","acc":0.8898,"cost":2.9886666666666666,"desc":"48 warmup calls per model, topic-and-format pooling; best of 98 settings","family":"earlier"},{"label":"\u03b5-greedy, best decaying \u03b5","acc":0.89051,"cost":3.092333333333333,"desc":"\u03b5 0.5 \u2192 0.005, 1 warmup call; best of 328 settings","family":"earlier"},{"label":"\u03b5-greedy, best below Gemini cost","acc":0.89049,"cost":2.8909333333333334,"desc":"\u03b5 0.5 \u2192 0, 48 warmup calls","family":"earlier"},{"label":"\u03b5-greedy, fresh-order check","acc":0.88631,"cost":3.113633333333333,"desc":"Best-below-Gemini setting replayed on 30 new question orders","family":"earlier"}],"oracle":{"0.89":{"global":2.710611534504133,"domain":2.1043117409578644},"0.85":{"global":1.4273806997933882,"domain":0.6747604859726143},"0.8":{"global":0.32594090000000003,"domain":0.32594089999999987},"0.825":{"global":0.6253614280991727,"domain":0.3484576852801862}},"maxDomainAcc":0.8985,"maxGlobalAcc":0.896};</script>
+<script>
+const D = window.ROUTING_DATA;
+const FAM = {
+  earlier: { name: "Earlier methods", color: "--earlier", shape: "circle" },
+  new: { name: "New: domain routing", color: "--new", shape: "diamond" },
+  ablation: { name: "New mechanism, no domains", color: "--ablation", shape: "square" },
+};
+const TAUS = [0.825, 0.85, 0.89];
+const LABELLED = new Set(["Domain TS κ=20", "FT KL-UCB", "Greedy, topic and format", "ε-greedy, best decaying ε"]);
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const NS = "http://www.w3.org/2000/svg";
+const el = (tag, attrs = {}, parent) => {
+  const n = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  if (parent) parent.appendChild(n);
+  return n;
+};
+const fmtAcc = (a) => a.toFixed(4);
+const fmtUsd = (c) => "$" + c.toFixed(2);
+let horizon = 10000;
+
+function niceTicks(lo, hi, count) {
+  const raw = (hi - lo) / count, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
+  const ticks = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) ticks.push(+v.toFixed(6));
+  return { ticks, step };
+}
+
+function shape(g, kind, x, y, r, fill, ring) {
+  const common = { fill, stroke: ring, "stroke-width": 1.5, class: "mark" };
+  if (kind === "circle") return el("circle", { cx: x, cy: y, r, ...common }, g);
+  if (kind === "square") return el("rect", { x: x - r * 0.9, y: y - r * 0.9, width: r * 1.8, height: r * 1.8, rx: 1.5, ...common }, g);
+  return el("path", { d: `M${x},${y - r * 1.25}L${x + r * 1.25},${y}L${x},${y + r * 1.25}L${x - r * 1.25},${y}Z`, ...common }, g);
+}
+
+const tip = document.getElementById("tip");
+function showTip(evt, html) {
+  tip.innerHTML = html; tip.hidden = false;
+  const pad = 14, w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = evt.clientX + pad, y = evt.clientY + pad;
+  if (x + w > innerWidth - 8) x = evt.clientX - w - pad;
+  if (y + h > innerHeight - 8) y = evt.clientY - h - pad;
+  tip.style.left = Math.max(8, x) + "px"; tip.style.top = Math.max(8, y) + "px";
+}
+const hideTip = () => { tip.hidden = true; };
+
+function tipHtml(p, tau) {
+  const rows = [["Accuracy", p.accSd != null ? `${fmtAcc(p.acc)} ± ${p.accSd.toFixed(4)}` : fmtAcc(p.acc)],
+                ["Cost / 1k questions", p.costSd != null ? `${fmtUsd(p.cost)} ± ${p.costSd.toFixed(2)}` : fmtUsd(p.cost)]];
+  if (tau != null) {
+    const gap = (p.acc - tau) * 100;
+    rows.push(["vs τ", (gap >= 0 ? "+" : "−") + Math.abs(gap).toFixed(2) + " pts"]);
+    rows.push(["Cost ÷ per-domain optimum", (p.cost / D.oracle[String(tau)].domain).toFixed(2) + "×"]);
+  } else {
+    const gem = D.fixed.find((f) => f.name.startsWith("Gemini"));
+    rows.push(["vs fixed Gemini", ((p.acc - gem.acc) * 100).toFixed(2) + " pts, " + (p.cost >= gem.cost ? "+" : "−") + fmtUsd(Math.abs(p.cost - gem.cost))]);
+  }
+  return `<div class="t">${p.label}</div><div class="d">${p.desc || ""}</div>` +
+    rows.map(([k, v]) => `<div class="row"><span>${k}</span><span>${v}</span></div>`).join("");
+}
+
+function drawPanel(container, cfg) {
+  const box = document.createElement("div"); box.className = "panel";
+  box.innerHTML = `<h3>${cfg.title}</h3><div class="sub">${cfg.sub}</div>`;
+  container.appendChild(box);
+  const W = 520, H = 330, M = { l: 50, r: 18, t: 14, b: 40 };
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": cfg.title }, box);
+  const pts = cfg.points;
+  let xHi = Math.max(...pts.map((p) => p.cost + (p.costSd || 0)), ...cfg.xRefs);
+  let yLo = Math.min(...pts.map((p) => p.acc - (p.accSd || 0)), ...cfg.yRefs);
+  let yHi = Math.max(...pts.map((p) => p.acc + (p.accSd || 0)), ...cfg.yRefs);
+  xHi *= 1.08; const yPad = (yHi - yLo) * 0.1; yLo -= yPad; yHi += yPad;
+  const X = (c) => M.l + (c / xHi) * (W - M.l - M.r);
+  const Y = (a) => H - M.b - ((a - yLo) / (yHi - yLo)) * (H - M.t - M.b);
+  const ink = css("--ink"), ink2 = css("--ink-2"), grid = css("--grid"), surface = css("--surface");
+  const clipId = "clip" + Math.random().toString(36).slice(2);
+  el("rect", { x: M.l, y: M.t, width: W - M.l - M.r, height: H - M.t - M.b }, el("clipPath", { id: clipId }, el("defs", {}, svg)));
+  const axis = el("g", { class: "axis" }, svg);
+  const xt = niceTicks(0, xHi, 5), yt = niceTicks(yLo, yHi, 5);
+  const yDigits = yt.step < 0.01 ? 3 : 2;
+  xt.ticks.forEach((t) => {
+    el("line", { x1: X(t), x2: X(t), y1: M.t, y2: H - M.b, stroke: grid, "stroke-width": 1 }, axis);
+    el("text", { x: X(t), y: H - M.b + 15, "text-anchor": "middle" }, axis).textContent = "$" + (xt.step < 1 ? t.toFixed(t % 1 ? (xt.step < 0.1 ? 2 : 1) : 0) : t);
+  });
+  yt.ticks.forEach((t) => {
+    el("line", { x1: M.l, x2: W - M.r, y1: Y(t), y2: Y(t), stroke: grid, "stroke-width": 1 }, axis);
+    el("text", { x: M.l - 6, y: Y(t) + 3.5, "text-anchor": "end" }, axis).textContent = t.toFixed(yDigits);
+  });
+  el("text", { x: (M.l + W - M.r) / 2, y: H - 6, "text-anchor": "middle", class: "axis-title" }, svg).textContent = "Cost, USD per 1,000 questions";
+  el("text", { x: 12, y: (M.t + H - M.b) / 2, "text-anchor": "middle", class: "axis-title", transform: `rotate(-90 12 ${(M.t + H - M.b) / 2})` }, svg).textContent = "Accuracy";
+
+  const plot = el("g", { "clip-path": `url(#${clipId})` }, svg);
+  for (const [key, dash] of [["global", "5 4"], ["domain", null]]) {
+    const d = D.frontiers[key].map(([a, c], i) => `${i ? "L" : "M"}${X(c).toFixed(1)},${Y(a).toFixed(1)}`).join("");
+    el("path", { d, fill: "none", stroke: ink2, "stroke-width": 1.5, ...(dash ? { "stroke-dasharray": dash } : {}) }, plot);
+  }
+  if (cfg.tau != null) {
+    el("line", { x1: M.l, x2: W - M.r, y1: Y(cfg.tau), y2: Y(cfg.tau), stroke: ink2, "stroke-width": 1, "stroke-dasharray": "2 3" }, plot);
+    el("text", { x: W - M.r - 4, y: Y(cfg.tau) - 5, "text-anchor": "end", class: "ref-label" }, svg).textContent = `τ = ${cfg.tau}`;
+    const o = D.oracle[String(cfg.tau)];
+    el("circle", { cx: X(o.domain), cy: Y(cfg.tau), r: 4.5, fill: ink, stroke: surface, "stroke-width": 1.5 }, svg);
+    el("text", { x: X(o.domain) + 7, y: Y(cfg.tau) + 14, class: "ref-label" }, svg).textContent = `optimum ${fmtUsd(o.domain)}`;
+  }
+  D.fixed.forEach((f) => {
+    if (f.cost > xHi || f.acc < yLo || f.acc > yHi) return;
+    el("rect", { x: X(f.cost) - 4, y: Y(f.acc) - 4, width: 8, height: 8, fill: surface, stroke: ink2, "stroke-width": 1.5 }, svg);
+    el("text", { x: X(f.cost) - 7, y: Y(f.acc) - 7, "text-anchor": "end", class: "ref-label" }, svg).textContent = f.name;
+  });
+  const marks = el("g", {}, svg), hits = el("g", {}, svg), groups = [];
+  pts.forEach((p) => {
+    const fam = FAM[p.family], color = css(fam.color), g = el("g", {}, marks), x = X(p.cost), y = Y(p.acc);
+    if (p.costSd != null) {
+      el("line", { x1: X(Math.max(0, p.cost - p.costSd)), x2: X(p.cost + p.costSd), y1: y, y2: y, stroke: color, "stroke-width": 1.5, opacity: 0.45 }, g);
+      el("line", { x1: x, x2: x, y1: Y(p.acc - p.accSd), y2: Y(p.acc + p.accSd), stroke: color, "stroke-width": 1.5, opacity: 0.45 }, g);
+    }
+    shape(g, fam.shape, x, y, 5, color, surface);
+    if (LABELLED.has(p.label)) {
+      const right = x < W - 150;
+      el("text", { x: right ? x + 9 : x - 9, y: y - 8, "text-anchor": right ? "start" : "end", class: "dlabel" }, g).textContent = p.label;
+    }
+    groups.push(g);
+    const hit = el("circle", { cx: x, cy: y, r: 12, class: "hit", tabindex: 0, "aria-label": `${p.label}: accuracy ${fmtAcc(p.acc)}, ${fmtUsd(p.cost)}` }, hits);
+    const on = (e) => { groups.forEach((o) => o.style.opacity = o === g ? 1 : 0.3); showTip(e, tipHtml(p, cfg.tau)); };
+    const off = () => { groups.forEach((o) => o.style.opacity = 1); hideTip(); };
+    hit.addEventListener("pointerenter", on); hit.addEventListener("pointermove", on); hit.addEventListener("pointerleave", off);
+    hit.addEventListener("focus", () => { const r = hit.getBoundingClientRect(); on({ clientX: r.right, clientY: r.bottom }); });
+    hit.addEventListener("blur", off);
+  });
+}
+
+function legend() {
+  const L = document.getElementById("legend"), surface = css("--surface"), ink2 = css("--ink-2"), ink = css("--ink");
+  const item = (svgInner, text) => `<span><svg width="22" height="14" viewBox="0 0 22 14" aria-hidden="true">${svgInner}</svg>${text}</span>`;
+  const sh = { circle: (c) => `<circle cx="11" cy="7" r="5" fill="${c}" stroke="${surface}" stroke-width="1.5"/>`,
+    diamond: (c) => `<path d="M11,0.8L17.2,7L11,13.2L4.8,7Z" fill="${c}" stroke="${surface}" stroke-width="1.5"/>`,
+    square: (c) => `<rect x="6.5" y="2.5" width="9" height="9" rx="1.5" fill="${c}" stroke="${surface}" stroke-width="1.5"/>` };
+  L.innerHTML = Object.values(FAM).map((f) => item(sh[f.shape](css(f.color)), f.name)).join("") +
+    item(`<line x1="1" x2="21" y1="7" y2="7" stroke="${ink2}" stroke-width="1.5"/>`, "Optimum per subject") +
+    item(`<line x1="1" x2="21" y1="7" y2="7" stroke="${ink2}" stroke-width="1.5" stroke-dasharray="5 4"/>`, "Optimum, one mix for all") +
+    item(`<rect x="7" y="3" width="8" height="8" fill="${surface}" stroke="${ink2}" stroke-width="1.5"/>`, "Single model");
+}
+
+function render() {
+  const P = document.getElementById("panels"); P.innerHTML = "";
+  const runs = D.runs.filter((r) => r.horizon === horizon);
+  TAUS.forEach((tau) => {
+    const pts = runs.filter((r) => r.tau === tau);
+    const o = D.oracle[String(tau)];
+    drawPanel(P, { title: `Target τ = ${tau}`, sub: `${horizon.toLocaleString("en")} rounds · keep overall accuracy at or above ${tau}`,
+      tau, points: pts, xRefs: [o.global, o.domain], yRefs: [tau] });
+  });
+  const gem = D.fixed.find((f) => f.name.startsWith("Gemini"));
+  drawPanel(P, { title: "No target: highest accuracy", sub: "3,000 rounds · Greedy and ε-greedy reports", tau: null,
+    points: D.greedy, xRefs: [gem.cost], yRefs: [gem.acc, 0.8985] });
+  renderTables(runs);
+}
+
+function renderTables(runs) {
+  document.getElementById("table-title").textContent = `All numbers, ${horizon.toLocaleString("en")} rounds`;
+  const T = document.getElementById("table");
+  const order = ["earlier", "new", "ablation"], seen = [];
+  runs.forEach((r) => { if (!seen.find((s) => s.label === r.label)) seen.push(r); });
+  let html = `<thead><tr><th>Method</th>${TAUS.map((t) => `<th colspan="2">τ = ${t}</th>`).join("")}</tr>` +
+    `<tr><th></th>${TAUS.map(() => "<th>Accuracy</th><th>$/1k</th>").join("")}</tr></thead><tbody>`;
+  order.forEach((fam) => {
+    html += `<tr class="group"><td colspan="${1 + TAUS.length * 2}">${FAM[fam].name}</td></tr>`;
+    seen.filter((s) => s.family === fam).forEach((s) => {
+      html += `<tr><td><span class="dot" style="background:var(${FAM[fam].color})"></span>${s.label}</td>`;
+      TAUS.forEach((t) => {
+        const r = runs.find((x) => x.label === s.label && x.tau === t);
+        html += `<td class="n ${r.acc < t - 0.005 ? "miss" : "ok"}">${fmtAcc(r.acc)}</td><td class="n">${fmtUsd(r.cost)}</td>`;
+      });
+      html += "</tr>";
+    });
+  });
+  html += `<tr class="group"><td colspan="${1 + TAUS.length * 2}">Full-knowledge optimum (cost at exactly τ)</td></tr>`;
+  for (const [k, name] of [["domain", "Per subject"], ["global", "One mix for all questions"]])
+    html += `<tr><td>${name}</td>${TAUS.map((t) => `<td class="n">${t.toFixed(4)}</td><td class="n">${fmtUsd(D.oracle[String(t)][k])}</td>`).join("")}</tr>`;
+  T.innerHTML = html + "</tbody>";
+  const G = document.getElementById("greedy"), gem = D.fixed.find((f) => f.name.startsWith("Gemini"));
+  G.innerHTML = `<thead><tr><th>Max-accuracy router (3,000 rounds)</th><th>Accuracy</th><th>$/1k</th><th>vs fixed Gemini</th></tr></thead><tbody>` +
+    D.fixed.map((f) => `<tr><td>Fixed ${f.name}</td><td class="n">${fmtAcc(f.acc)}</td><td class="n">${fmtUsd(f.cost)}</td><td class="n">${f === gem ? "reference" : ((f.acc - gem.acc) * 100).toFixed(2) + " pts"}</td></tr>`).join("") +
+    D.greedy.map((g) => `<tr><td><span class="dot" style="background:var(--earlier)"></span>${g.label}</td><td class="n">${fmtAcc(g.acc)}</td><td class="n">${fmtUsd(g.cost)}</td><td class="n">${((g.acc - gem.acc) * 100).toFixed(2)} pts</td></tr>`).join("") + "</tbody>";
+}
+
+function setHorizon(h) {
+  horizon = h;
+  document.getElementById("h3000").setAttribute("aria-pressed", h === 3000);
+  document.getElementById("h10000").setAttribute("aria-pressed", h === 10000);
+  render();
+}
+document.getElementById("h3000").addEventListener("click", () => setHorizon(3000));
+document.getElementById("h10000").addEventListener("click", () => setHorizon(10000));
+legend(); render();
+const mq = matchMedia("(prefers-color-scheme: dark)");
+mq.addEventListener("change", () => { legend(); render(); });
+new MutationObserver(() => { legend(); render(); }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+</script>
+</body>
+</html>
