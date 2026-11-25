@@ -14,3 +14,11 @@ dev = [
     "numpy>=2.0",
     "pandas>=2.2",
 ]
+features = [
+    "huggingface-hub>=2.4.0",
+    "pillow>=12.3.0",
+    "pyarrow>=25.0.1",
+    "scikit-learn>=1.7.2",
+    "sentence-transformers>=6.3.0",
+    "torch>=2.14.1",
+]

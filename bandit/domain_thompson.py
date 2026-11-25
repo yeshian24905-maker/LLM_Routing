@@ -30,7 +30,7 @@ class DomainPrimalDualThompson(DomainPrimalDualUCB):
         pooled = min(max(pooled, 1e-9), 1 - 1e-9)
         return self.rng.betavariate(self.kappa * pooled + s, self.kappa * (1 - pooled) + n - s)
 
-    def select(self, domain):
+    def select(self, domain, question=None):
         self.t += 1
         price = self.accuracy_price
         draws = {arm: self.sample(domain, arm) for arm in self.arms}

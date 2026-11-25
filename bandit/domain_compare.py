@@ -1,6 +1,7 @@
 """Paired offline comparison of domain-aware primal-dual UCB and Thompson routing with FT-UCB baselines."""
 
 import argparse
+import csv
 import hashlib
 import json
 import math
@@ -13,6 +14,7 @@ from .data import load_csv_replay
 from .domain_dual import DomainPrimalDualUCB
 from .domain_oracle import oracle_routing
 from .domain_thompson import DomainPrimalDualThompson
+from .prior_thompson import PriorPrimalDualThompson
 from .domain_plot import plot_tradeoff
 from .ft_evaluate import DEFAULT_THRESHOLDS, arm_statistics, resolve_costs
 
@@ -23,10 +25,10 @@ class GlobalFT:
     def __init__(self, models, costs, threshold, kind, seed):
         self.policy = FixedThresholdConfidence(models, costs, threshold, kind, seed=seed)
 
-    def select(self, domain):
+    def select(self, domain, question=None):
         return self.policy.select(diagnostics=False)
 
-    def update(self, domain, arm, correct):
+    def update(self, domain, arm, correct, question=None):
         self.policy.update(arm, correct)
 
 
@@ -45,10 +47,10 @@ class PerDomainFT:
                 models, costs, threshold, kind, seed=f"{self.seed}:{domain}")
         return self.policies[domain]
 
-    def select(self, domain):
+    def select(self, domain, question=None):
         return self._policy(domain).select(diagnostics=False)
 
-    def update(self, domain, arm, correct):
+    def update(self, domain, arm, correct, question=None):
         self._policy(domain).update(arm, correct)
 
 
@@ -68,6 +70,35 @@ def policy_factories(kappas, etas, betas, lambda0):
             factories[f"ts_k{tag}_eta{eta:g}"] = (lambda k, e: lambda m, c, t, s: DomainPrimalDualThompson(
                 m, c, t, kappa=k, eta=e, lambda0=lambda0, seed=f"ts:{s}"))(kappa, eta)
     return factories
+
+
+def prior_factories(priors, kappas, eta, lambda0):
+    """Map prior_<predictor>_k<kappa> to a PriorPrimalDualThompson factory per predictor."""
+    factories = {}
+    for name, table in priors.items():
+        for kappa in kappas:
+            tag = "inf" if math.isinf(kappa) else f"{kappa:g}"
+            factories[f"prior_{name}_k{tag}"] = (lambda p, k: lambda m, c, t, s: PriorPrimalDualThompson(
+                m, c, t, p, kappa=k, eta=eta, lambda0=lambda0, seed=f"ts:{s}"))(table, kappa)
+    return factories
+
+
+def read_groups(path):
+    with Path(path).open(encoding="utf-8", newline="") as stream:
+        return {row["question_id"]: row["group"] for row in csv.DictReader(stream)}
+
+
+def read_priors(path, predictors, models):
+    """{predictor: {question_id: {model: predicted accuracy}}} from a question_features priors.csv."""
+    priors = {name: {} for name in predictors}
+    with Path(path).open(encoding="utf-8", newline="") as stream:
+        for row in csv.DictReader(stream):
+            if row["predictor"] in priors:
+                priors[row["predictor"]][row["question_id"]] = {m: float(row[m]) for m in models}
+    empty = [name for name, table in priors.items() if not table]
+    if empty:
+        raise ValueError(f"No rows for predictors {empty} in {path}")
+    return priors
 
 
 def _moments(values):
@@ -92,9 +123,9 @@ def run_domain_comparison(table, domains, models, costs, factories, *, horizons,
                     picks = dict.fromkeys(models, 0)
                     for t, question_id in enumerate(stream, 1):
                         domain = domains[question_id]
-                        arm = policy.select(domain)
+                        arm = policy.select(domain, question_id)
                         outcome = table[question_id][arm].correct
-                        policy.update(domain, arm, outcome)
+                        policy.update(domain, arm, outcome, question_id)
                         correct += outcome
                         spent += costs[arm]
                         picks[arm] += 1
@@ -160,6 +191,12 @@ def main(argv=None):
     parser.add_argument("--betas", type=float, nargs="+", default=[0.5])
     parser.add_argument("--lambda0", type=float, default=0.0)
     parser.add_argument("--no-baselines", action="store_true", help="Run only the primal-dual UCB and Thompson variants.")
+    parser.add_argument("--groups", type=Path,
+                        help="question_id,group CSV that replaces the subject as the domain of each question.")
+    parser.add_argument("--priors", type=Path, help="priors.csv from python -m question_features predict.")
+    parser.add_argument("--prior-predictors", nargs="+", default=["subject", "text_image"])
+    parser.add_argument("--prior-kappas", type=float, nargs="+", default=[20, math.inf],
+                        help="Group-offset weights for the prior policies; inf uses the predictions as they are.")
     parser.add_argument("--output-dir", type=Path, default=root / "bandit/output/domain-comparison")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--empirical-costs", action="store_true")
@@ -169,12 +206,19 @@ def main(argv=None):
         source_hash = hashlib.sha256(args.results_csv.read_bytes()).hexdigest()
         table, models, scored = load_csv_replay(args.results_csv, args.scores_csv, args.expected_prompts)
         domains = {row["question_id"]: row["subject"] for row in scored}
+        if args.groups:
+            domains = read_groups(args.groups)
+            if set(domains) != set(table):
+                raise ValueError(f"{args.groups} must assign a group to every question, and only those")
         stats = arm_statistics(table, models)
         fixed = json.loads(args.arm_costs.read_text(encoding="utf-8-sig")) if args.arm_costs else None
         costs = resolve_costs(models, stats, fixed, args.empirical_costs)
         factories = policy_factories(args.kappas, args.etas, args.betas, args.lambda0)
         if args.no_baselines:
             factories = {k: v for k, v in factories.items() if k.startswith(("pd_", "ts_"))}
+        if args.priors:
+            factories.update(prior_factories(read_priors(args.priors, args.prior_predictors, models),
+                                             args.prior_kappas, args.etas[0], args.lambda0))
         runs, aggregates, curves = run_domain_comparison(
             table, domains, models, costs, factories, horizons=args.horizons,
             thresholds=args.thresholds, repeats=args.repeats, seed=args.seed,
@@ -186,7 +230,9 @@ def main(argv=None):
             "questions": len(table), "domains": len(set(domains.values())), "models": models,
             "arm_costs_usd": costs, "arm_statistics": stats, "policies": list(factories),
             "kappas": [str(k) for k in args.kappas], "etas": args.etas, "betas": args.betas,
-            "lambda0": args.lambda0, "horizons": args.horizons, "thresholds": args.thresholds,
+            "lambda0": args.lambda0, "groups": str(args.groups or "subject"),
+            "priors": str(args.priors) if args.priors else None, "prior_predictors": args.prior_predictors if args.priors else None,
+            "prior_kappas": [str(k) for k in args.prior_kappas] if args.priors else None, "horizons": args.horizons, "thresholds": args.thresholds,
             "repeats": args.repeats, "primary_seed": args.seed, "input_sha256": source_hash,
             "network_connections_attempted": len(attempts),
             "oracle_note": "LP optimum from all saved outcomes; evaluation only, never seen by a policy.",

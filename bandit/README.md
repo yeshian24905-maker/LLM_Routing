@@ -49,6 +49,11 @@ python -m bandit.domain_compare --empirical-costs
 默认运行 30 个种子、3000 和 10000 轮、四个阈值，κ 取 inf、5、20、50，η = 1，β = 0.5。
 基线是全局 FT-UCB、全局 KL-UCB，以及每个领域各跑一个 KL-UCB。`--no-baselines` 只运行新策略。
 命令还用全部已有结果解线性规划，给出达到每个阈值的最低成本，分为不区分领域和按领域两种。该最优解只用于评估，策略看不到。
+两个可选输入来自 `question_features` 包，生成方法见项目根目录 README 的 “Learned question features” 一节：
+
+- `--priors data/mmmu/priors.csv`：增加 `prior_<预测器>_k<κ>` 策略（`bandit/prior_thompson.py`）。每次抽样以离线预测的该题正确率为中心，再按领域学习预测的偏差；`κ = inf` 表示直接使用预测值。`--prior-predictors` 选择预测器，`--prior-kappas` 设定在线修正的权重。
+- `--groups data/mmmu/groups_text_image_k16.csv`：用学出的分组代替 `subject`，作为所有策略和最优解的领域。
+
 运行期间阻断网络连接。结果输出到 `bandit/output/domain-comparison/`：`runs.csv`、`aggregates.csv`、每 100 轮的均值曲线 `curves.csv`、`summary.json` 和成本–正确率图 `tradeoff.png`。
 
 ### 运行原始算法

@@ -61,7 +61,7 @@ class DomainPrimalDualUCB:
         weight = self.kappa / (n + self.kappa)
         return mean, math.sqrt(mean * (1 - mean) / (n + self.kappa + 1) + weight**2 * pooled_var)
 
-    def select(self, domain):
+    def select(self, domain, question=None):
         self.t += 1
         radius = math.sqrt(self.beta * math.log(self.t))
         price = self.accuracy_price
@@ -73,7 +73,7 @@ class DomainPrimalDualUCB:
         self.last_decision = {"accuracy_price": price, "bounds": bounds}
         return arm
 
-    def update(self, domain, arm, correct):
+    def update(self, domain, arm, correct, question=None):
         if arm not in self.arm_counts:
             raise ValueError(f"Unknown arm: {arm}")
         if correct not in (0, 1):
