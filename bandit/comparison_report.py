@@ -260,7 +260,7 @@ def render_comparison(summary, runs, aggregates, curves, pdf_path, output_dir):
             "are used only for evaluation; policy updates see the selected saved reward. Fixed costs are calibrated "
             "from known CSV charges. Unknown charges are never substituted with zero.", 9.1)
         section(fig, y+.29, "Dataset, sampling and reproducibility")
-        y = para(fig, y+.64, f"The supplied result.csv contains {summary['questions']:,} questions and "
+        y = para(fig, y+.64, f"The supplied results_3000.csv contains {summary['questions']:,} questions and "
             f"{summary['outcomes']:,} model outcomes. Verified archived labels are preserved, and the remaining "
             f"answers use the same previous scoring rules. {summary['needs_review']} records retain manual-review flags. "
             "All methods share question streams, seeds, costs and labels. Longer runs resample the same saved pool; "

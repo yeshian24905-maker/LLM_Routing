@@ -1,13 +1,13 @@
 # LLM_Routing
 
-FT-UCB routes all **3000 questions with four saved model outcomes each** in the supplied `result.csv`. It selects one model per question and uses only that model's saved outcome as feedback. No model APIs are called.
+FT-UCB routes all **3000 questions with four saved model outcomes each** in the supplied `results_3000.csv`. It selects one model per question and uses only that model's saved outcome as feedback. No model APIs are called.
 
 See the [bandit guide](bandit/README.md) for FT-UCB (paper Algorithm 6) at four feasibility thresholds, per-round routing logs, cost/quality regret, reports and plots. No model APIs are called.
 
 Run one 3000-round offline replay per threshold (89%, 85%, 80%, 82.5%):
 
 ```powershell
-python -m bandit --results-csv result.csv --scores-csv bandit/output/ft-ucb/scored_results.csv --expected-prompts 3000 --empirical-costs --output-dir bandit/output/ft-ucb-verified
+python -m bandit --results-csv results_3000.csv --scores-csv bandit/output/ft-ucb/scored_results.csv --expected-prompts 3000 --empirical-costs --output-dir bandit/output/ft-ucb-verified
 ```
 
 The optional archive preserves verified saved labels for its 1000 questions; it does not limit the run to that subset. The remaining 2000 questions are scored against the raw CSV reference answers, with review flags for open responses and unresolved choice text. `mu0` controls the per-round UCB candidate set. The original MMMU folder mode is still available via `--data-dir`.
@@ -17,7 +17,7 @@ The latest local 3000-question [report](bandit/output/ft-ucb-verified/report.md)
 Compare the original UCB with the three proposed confidence-bound changes:
 
 ```powershell
-python -m bandit.compare --empirical-costs --repeats 30 --horizons 3000 10000
+python -m bandit.compare --results-csv results_3000.csv --empirical-costs --repeats 30 --horizons 3000 10000
 ```
 
 This tests tight UCB (`0.5 log(t)`), Bernoulli KL-UCB (`c=0`, with `c=3` as a sensitivity check), and LCB (the original radius with a minus sign). Each policy keeps the same cheapest-eligible-arm selection and uniform fallback. The 3000-round runs use every question once; 10000-round runs sample the same saved pool with replacement, with no new model calls. The command blocks network connections, writes paired results and primary-seed traces to `bandit/output/confidence-comparison/`, and exports [one English PDF](artifacts/Confidence_Methods_Comparison.pdf).

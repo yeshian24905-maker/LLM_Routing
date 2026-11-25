@@ -1,7 +1,7 @@
 # FT-UCB 离线路由实验
 
 实现论文 [Appendix H, Algorithm 6](https://users.ece.cmu.edu/~oyagan/Conferences/ICLR2025.pdf#page=54)，
-以当前 `result.csv` 中的 **3000 道题、4 个模型（12000 条已有回答）**做离线回放，
+以当前 `results_3000.csv` 中的 **3000 道题、4 个模型（12000 条已有回答）**做离线回放，
 每道题先选一个模型，再读取该题该模型的已有回答；每个阈值独立运行 3000 轮。
 不调用模型 API。四个阈值为 **89%、85%、80%、82.5%**。
 需要 Python 3.10+ 和 Matplotlib。
@@ -11,7 +11,7 @@
 ### 比较三种置信界改法
 
 ```powershell
-python -m bandit.compare --empirical-costs --repeats 30 --horizons 3000 10000 --thresholds 0.89 0.85 0.80 0.825 --seed 42
+python -m bandit.compare --results-csv results_3000.csv --empirical-costs --repeats 30 --horizons 3000 10000 --thresholds 0.89 0.85 0.80 0.825 --seed 42
 ```
 
 保留原始 FT-UCB 作为基线，新增：
@@ -37,12 +37,12 @@ LCB 没有偷偷改成“总选最高准确率模型”。每个策略只用本�
 使用当前的完整 CSV，并复用其中已经归档、可核对的评分：
 
 ```powershell
-python -m bandit --results-csv result.csv --scores-csv bandit/output/ft-ucb/scored_results.csv --expected-prompts 3000 --empirical-costs --repeats 1 --seed 42 --output-dir bandit/output/ft-ucb-verified
+python -m bandit --results-csv results_3000.csv --scores-csv bandit/output/ft-ucb/scored_results.csv --expected-prompts 3000 --empirical-costs --repeats 1 --seed 42 --output-dir bandit/output/ft-ucb-verified
 ```
 
-该模式从 `result.csv` 核对归档子集的每个原始字段，仅允许换行符差异，保留原来的评分和人工复核标记。
+该模式从 `results_3000.csv` 核对归档子集的每个原始字段，仅允许换行符差异，保留原来的评分和人工复核标记。
 不重新下载题目、不调用模型 API。输出目录必须与归档评分输入分开。
-**题目集合由完整的 `result.csv` 决定，不会被旧的 1000 题归档缩减。**
+**题目集合由完整的 `results_3000.csv` 决定，不会被旧的 1000 题归档缩减。**
 其余 2000 道题按 CSV 标准答案自动评分；开放题和无法识别选项的回答保留人工复核标记。
 `--scores-csv` 可省略，此时全部回答重新评分；原 CSV 不含选项文本，数字/文本形式的选择题答案无法映射时计错并标记复核。
 `--expected-prompts` 是可选的题数校验，CSV 模式省略时使用全部题目。

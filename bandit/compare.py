@@ -174,7 +174,7 @@ def write_csv(path, rows):
 def main(argv=None):
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--results-csv", type=Path, default=root/"result.csv")
+    parser.add_argument("--results-csv", type=Path, default=root/"results_3000.csv")
     parser.add_argument("--scores-csv", type=Path, default=root/"bandit/output/ft-ucb/scored_results.csv")
     parser.add_argument("--expected-prompts", type=int, default=3000)
     parser.add_argument("--horizons", type=int, nargs="+", default=[3000, 10000])
