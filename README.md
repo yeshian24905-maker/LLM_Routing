@@ -21,3 +21,7 @@ python -m bandit.compare --results-csv results_3000.csv --empirical-costs --repe
 ```
 
 This tests tight UCB (`0.5 log(t)`), Bernoulli KL-UCB (`c=0`, with `c=3` as a sensitivity check), and LCB (the original radius with a minus sign). Each policy keeps the same cheapest-eligible-arm selection and uniform fallback. The 3000-round runs use every question once; 10000-round runs sample the same saved pool with replacement, with no new model calls. The command blocks network connections, writes paired results and primary-seed traces to `bandit/output/confidence-comparison/`, and exports [one English PDF](artifacts/Confidence_Methods_Comparison.pdf).
+
+## Acknowledgement
+
+The development of this project is assisted by LLMs and AI agents.
