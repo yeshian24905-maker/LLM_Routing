@@ -21,7 +21,7 @@ The usage commands in this guide and in the [bandit guide](bandit/README.md) sta
 
 Do not run the commands with the system `python3` of macOS. It is Python 3.9, which cannot import this code, and it does not have the packages.
 
-The code in `bandit/` needs only matplotlib. The `dev` group adds numpy, pandas and scipy for experiments. `uv sync` installs the `dev` group, and `uv sync --no-dev` does not. To add a package, run `uv add <package>`, or `uv add --dev <package>` for a package that only experiments use. Commit `pyproject.toml` and `uv.lock` together.
+The code in `bandit/` needs matplotlib and scipy. The `dev` group adds numpy and pandas for experiments. `uv sync` installs the `dev` group, and `uv sync --no-dev` does not. To add a package, run `uv add <package>`, or `uv add --dev <package>` for a package that only experiments use. Commit `pyproject.toml` and `uv.lock` together.
 
 Run the unit tests:
 
@@ -48,6 +48,14 @@ python -m bandit.compare --results-csv results_3000.csv --empirical-costs --repe
 ```
 
 This tests tight UCB (`0.5 log(t)`), Bernoulli KL-UCB (`c=0`, with `c=3` as a sensitivity check), and LCB (the original radius with a minus sign). Each policy keeps the same cheapest-eligible-arm selection and uniform fallback. The 3000-round runs use every question once; 10000-round runs sample the same saved pool with replacement, with no new model calls. The command blocks network connections, writes paired results and primary-seed traces to `bandit/output/confidence-comparison/`, and exports [one English PDF](artifacts/Confidence_Methods_Comparison.pdf).
+
+Compare routing by question domain with the FT baselines:
+
+```powershell
+python -m bandit.domain_compare --empirical-costs
+```
+
+The two domain policies use the subject of each question as its domain, and keep the overall accuracy at the threshold. For each question, they choose the model with the lowest `cost − λ × accuracy`. The accuracy of a model in a domain starts at the model's accuracy over all domains and moves to the domain's own value as data comes in. `λ` grows when the cumulative accuracy falls below the threshold. `pd_*` policies use an upper confidence bound, and `ts_*` policies use Thompson sampling. The command also reports the cheapest routing that reaches each threshold, with and without domains, from all saved outcomes. It writes the results and `tradeoff.png` to `bandit/output/domain-comparison/`. The [bandit guide](bandit/README.md) gives the details.
 
 ## Acknowledgement
 

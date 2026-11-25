@@ -4,7 +4,7 @@
 以当前 `results_3000.csv` 中的 **3000 道题、4 个模型（12000 条已有回答）**做离线回放，
 每道题先选一个模型，再读取该题该模型的已有回答；每个阈值独立运行 3000 轮。
 不调用模型 API。四个阈值为 **89%、85%、80%、82.5%**。
-需要 Python 3.10+ 和 Matplotlib。依赖登记在项目根目录的 `pyproject.toml`；在根目录运行一次 `uv sync` 即可在 `.venv` 中建好环境。
+需要 Python 3.10+、Matplotlib 和 SciPy。依赖登记在项目根目录的 `pyproject.toml`；在根目录运行一次 `uv sync` 即可在 `.venv` 中建好环境。
 之后先激活 `.venv`，或在下面每条命令前加 `uv run`。
 
 ## 使用
@@ -32,6 +32,24 @@ LCB 没有偷偷改成“总选最高准确率模型”。每个策略只用本�
 英文 PDF 输出到 `artifacts/Confidence_Methods_Comparison.pdf`；PDF 源代码使用 UTF-8，并嵌入字体。
 
 本比较不宣称修改后的成本约束策略自动继承原论文或标准最大化奖励 KL-UCB 的全部保证；这里只验证实现并报告离线表现。
+
+### 按题目领域路由
+
+```powershell
+python -m bandit.domain_compare --empirical-costs
+```
+
+两个新策略以每道题的 `subject` 作为领域，约束的是**总体**正确率 ≥ τ，不要求每个领域都达标：
+
+- 每道题选使 `归一化成本 − λ × 正确率` 最小的模型。成本除以最贵模型的成本。
+- 各模型在各领域的正确率使用 Beta 先验，中心是该模型在所有领域上的总体正确率，权重相当于 κ 道题。领域数据少时估计接近总体值，数据多后接近领域自己的值。`κ = inf` 表示不区分领域。
+- λ 等于 η 乘以累计正确率缺口 `Σ(τ − correct)`，最小为 0。正确率低于 τ 时 λ 上升，更多领域改用贵模型。
+- `pd_*`（`bandit/domain_dual.py`）用后验均值加 `sqrt(β ln t)` 倍后验标准差作为正确率。`ts_*`（`bandit/domain_thompson.py`）先抽总体正确率，再抽领域正确率（Thompson sampling）。
+
+默认运行 30 个种子、3000 和 10000 轮、四个阈值，κ 取 inf、5、20、50，η = 1，β = 0.5。
+基线是全局 FT-UCB、全局 KL-UCB，以及每个领域各跑一个 KL-UCB。`--no-baselines` 只运行新策略。
+命令还用全部已有结果解线性规划，给出达到每个阈值的最低成本，分为不区分领域和按领域两种。该最优解只用于评估，策略看不到。
+运行期间阻断网络连接。结果输出到 `bandit/output/domain-comparison/`：`runs.csv`、`aggregates.csv`、每 100 轮的均值曲线 `curves.csv`、`summary.json` 和成本–正确率图 `tradeoff.png`。
 
 ### 运行原始算法
 

@@ -5,6 +5,7 @@ description = "Offline bandit routing of questions across LLMs from saved model 
 requires-python = ">=3.10"
 dependencies = [
     "matplotlib>=3.6",
+    "scipy>=1.13",
 ]
 
 [dependency-groups]
@@ -12,5 +13,4 @@ dependencies = [
 dev = [
     "numpy>=2.0",
     "pandas>=2.2",
-    "scipy>=1.13",
 ]
